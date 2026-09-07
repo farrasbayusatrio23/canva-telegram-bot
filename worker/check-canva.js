@@ -15,6 +15,110 @@ function extractEmails(value) {
   return [...new Set((String(value || "").match(EMAIL_RE) || []).map(x => x.toLowerCase()))];
 }
 
+
+function extractMemberCountHint(text) {
+  const value = String(text || "").replace(/\u00a0/g, " " );
+  const patterns = [
+    /(?:people|members?|anggota)\s*\(?\s*(\d{1,4})\s*\)?/i,
+    /(\d{1,4})\s*(?:people|members?|anggota)\b/i
+  ];
+  for (const re of patterns) {
+    const m = value.match(re);
+    if (m) return Number(m[1]) || 0;
+  }
+  return 0;
+}
+
+async function waitForPeopleUi(page) {
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => {
+    const text = document.body?.innerText || "";
+    return /people|member|anggota|tim|team/i.test(text) ||
+      document.querySelector("[role='row'], tr, [role='listitem'], [data-testid*='member' i], [data-testid*='people' i]");
+  }, { timeout: 15000 }).catch(() => {});
+  await sleep(1500);
+}
+
+async function collectEmailsFromMemberRows(page) {
+  const raw = await page.evaluate(() => {
+    const selectors = [
+      "tr",
+      "[role='row']",
+      "[role='listitem']",
+      "[data-testid*='member' i]",
+      "[data-testid*='user' i]",
+      "[data-testid*='people' i]"
+    ];
+    const seen = new Set();
+    const values = [];
+    for (const selector of selectors) {
+      for (const el of document.querySelectorAll(selector)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        values.push(el.innerText || "");
+        values.push(el.textContent || "");
+        values.push(el.getAttribute?.("aria-label") || "");
+        values.push(el.getAttribute?.("title") || "");
+        values.push(el.getAttribute?.("data-testid") || "");
+      }
+    }
+    return values.join("\n");
+  });
+  return extractEmails(raw);
+}
+
+async function closeMemberDetail(page) {
+  const closePatterns = [/^close$/i, /^tutup$/i, /close dialog/i, /tutup dialog/i];
+  for (const pattern of closePatterns) {
+    const btn = page.getByRole("button", { name: pattern }).last();
+    if (await btn.count().catch(() => 0)) {
+      try { await btn.click({ timeout: 900 }); await sleep(250); return; } catch {}
+    }
+  }
+  try { await page.keyboard.press("Escape"); await sleep(200); } catch {}
+}
+
+async function collectEmailsByOpeningMemberRows(page, maxRows = 60) {
+  const found = new Set();
+  const candidates = page.locator("tr, [role='row'], [role='listitem'], [data-testid*='member' i], [data-testid*='user' i]");
+  const count = Math.min(await candidates.count().catch(() => 0), maxRows);
+
+  for (let i = 0; i < count; i++) {
+    const row = candidates.nth(i);
+    let visible = false;
+    try { visible = await row.isVisible(); } catch {}
+    if (!visible) continue;
+
+    let rowText = "";
+    try { rowText = (await row.innerText()).trim(); } catch {}
+    if (!rowText || rowText.length > 800) continue;
+    if (/invite|undang|add people|tambah orang|search|cari anggota/i.test(rowText) && rowText.length < 120) continue;
+
+    for (const email of extractEmails(rowText)) found.add(email);
+    if (extractEmails(rowText).length) continue;
+
+    const beforeUrl = page.url();
+    try {
+      await row.scrollIntoViewIfNeeded().catch(() => {});
+      await row.click({ timeout: 1200, position: { x: 30, y: 20 } });
+      await sleep(450);
+
+      const detailEmails = await collectEmailsFromDom(page);
+      for (const email of detailEmails) found.add(email);
+
+      if (page.url() !== beforeUrl && !/\/settings\/people/i.test(page.url())) {
+        await page.goBack({ waitUntil: "domcontentloaded", timeout: 5000 }).catch(() => {});
+        await waitForPeopleUi(page);
+      } else {
+        await closeMemberDetail(page);
+      }
+    } catch {
+      // Some rows are not clickable; continue with other rows.
+    }
+  }
+  return [...found].sort();
+}
+
 async function audit(supabase, accountId, accessId, email, event, details = {}) {
   const { error } = await supabase.from("canva_audit").insert({
     account_id: accountId,
@@ -390,9 +494,12 @@ async function processAccount(supabase, account) {
       timeout: 60000
     });
 
-    await sleep(6000);
+    await sleep(4000);
+    await waitForPeopleUi(page);
 
-    const bodyText = (await page.locator("body").innerText()).slice(0, 5000);
+    const fullBodyText = await page.locator("body").innerText().catch(() => "");
+    const bodyText = fullBodyText.slice(0, 5000);
+    const memberCountHint = extractMemberCountHint(fullBodyText);
     const finalUrl = page.url();
     const pageTitle = await page.title().catch(() => "");
     const authUrl = /\/login(?:\/|\?|$)|\/signup(?:\/|\?|$)|\/auth(?:\/|\?|$)/i.test(finalUrl);
@@ -421,16 +528,26 @@ async function processAccount(supabase, account) {
     // Canva frequently renders the visible member row without exposing the email
     // as plain text. Collect from DOM + full HTML + JSON/GraphQL responses.
     const domEmails = await scanMemberEmails(page);
-    await sleep(1500);
+    const rowEmails = await collectEmailsFromMemberRows(page);
+    await sleep(1000);
+    let expandedEmails = [];
+    if (!domEmails.length && !rowEmails.length && networkCollector.found.size === 0) {
+      expandedEmails = await collectEmailsByOpeningMemberRows(page);
+    }
     const htmlEmails = extractEmails(await page.content().catch(() => ""));
     const memberEmails = [...new Set([
       ...domEmails,
+      ...rowEmails,
+      ...expandedEmails,
       ...htmlEmails,
       ...networkCollector.found
     ])].sort();
 
     detected = memberEmails.length;
+    console.log(`[scan] member_count_hint=${memberCountHint}`);
     console.log(`[scan] dom_emails=${domEmails.length}`);
+    console.log(`[scan] row_emails=${rowEmails.length}`);
+    console.log(`[scan] expanded_row_emails=${expandedEmails.length}`);
     console.log(`[scan] html_emails=${htmlEmails.length}`);
     console.log(`[scan] network_emails=${networkCollector.found.size}`);
     console.log(`[scan] network_sources=${networkCollector.sources.length}`);
@@ -441,25 +558,27 @@ async function processAccount(supabase, account) {
       const diagnostic = {
         url: finalUrl,
         title: pageTitle,
-        body_sample: bodyText.slice(0, 1200),
+        member_count_hint: memberCountHint,
         dom_email_count: domEmails.length,
+        row_email_count: rowEmails.length,
+        expanded_row_email_count: expandedEmails.length,
         html_email_count: htmlEmails.length,
         network_email_count: networkCollector.found.size,
-        network_sources: networkCollector.sources.slice(0, 20)
+        network_sources_count: networkCollector.sources.length
       };
-      const error = "member_scan_empty";
+      const error = memberCountHint > 0 ? "member_emails_hidden" : "member_scan_empty";
       console.log(`[scan] ${error}; final_url=${finalUrl}; title=${pageTitle}`);
-      console.log(`[scan] page_hint=${bodyText.replace(/\s+/g, " ").slice(0, 350)}`);
       await audit(supabase, account.id, null, null, error, diagnostic);
       await updateAccountScan(supabase, account.id, {
-        total: 0,
+        total: memberCountHint || 0,
         unauthorized: 0,
         removed: 0,
         error
       });
       await notifyAdmins(
-        `Canva Checker: ${account.name} tidak menemukan email anggota. ` +
-        `Snapshot lama tidak dihapus. Cek Members URL/session. URL saat scan: ${page.url()}`
+        memberCountHint > 0
+          ? `Canva Checker: ${account.name} mendeteksi sekitar ${memberCountHint} anggota, tetapi Canva tidak mengekspos email anggota ke DOM/detail yang dapat dibaca. Auto-remove dilewati.`
+          : `Canva Checker: ${account.name} tidak menemukan email anggota. Snapshot lama tidak dihapus. Cek Members URL/session. URL saat scan: ${page.url()}`
       );
       return;
     }
