@@ -86,6 +86,141 @@ async function collectEmailsFromMemberRows(page) {
   return extractEmails(raw);
 }
 
+
+// Strict member-row collector. The broad v6.4 collector intentionally searched
+// the whole page/network and could include unrelated account, invitation, billing,
+// or cached emails. For destructive actions we only trust a source that matches
+// Canva's own member-count hint.
+async function collectStrictMemberRowSources(page) {
+  const selectorDefs = [
+    { name: "role_row", selector: "[role='row']" },
+    { name: "table_row", selector: "tr" },
+    { name: "member_testid", selector: "[data-testid*='member' i]" },
+    { name: "people_testid", selector: "[data-testid*='people' i]" },
+    { name: "user_testid", selector: "[data-testid*='user' i]" },
+    { name: "listitem", selector: "[role='listitem']" }
+  ];
+
+  const buckets = new Map(selectorDefs.map(x => [x.name, new Set()]));
+  const rejectedMultiEmailRows = new Map(selectorDefs.map(x => [x.name, 0]));
+
+  for (let pass = 0; pass < 28; pass++) {
+    const batch = await page.evaluate((defs) => {
+      const isVisible = el => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (!rect.width || !rect.height) return false;
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        if (Number(style.opacity || 1) === 0) return false;
+        if (el.closest('[aria-hidden="true"]')) return false;
+        return true;
+      };
+
+      return defs.map(def => {
+        const rows = [];
+        for (const el of document.querySelectorAll(def.selector)) {
+          if (!isVisible(el)) continue;
+          const text = [
+            el.innerText || "",
+            el.getAttribute?.("aria-label") || "",
+            el.getAttribute?.("title") || ""
+          ].filter(Boolean).join(" ").trim();
+          if (!text || text.length > 1200) continue;
+          rows.push(text);
+        }
+        return { name: def.name, rows };
+      });
+    }, selectorDefs);
+
+    for (const group of batch) {
+      for (const text of group.rows) {
+        if (/\b(invite|invited|invitation|undang|diundang|pending invite|search|cari anggota|add people|tambah orang)\b/i.test(text)) {
+          continue;
+        }
+        const emails = extractEmails(text);
+        // A real member row should identify one member. Containers that include
+        // multiple member rows are skipped instead of contaminating the set.
+        if (emails.length === 1) {
+          buckets.get(group.name).add(emails[0]);
+        } else if (emails.length > 1) {
+          rejectedMultiEmailRows.set(group.name, rejectedMultiEmailRows.get(group.name) + 1);
+        }
+      }
+    }
+
+    // Advance the largest scrollable regions to support virtualized member lists.
+    const moved = await page.evaluate(() => {
+      const candidates = [...document.querySelectorAll("div,main,section,[role='grid'],[role='table']")]
+        .filter(el => el.scrollHeight > el.clientHeight + 100)
+        .sort((a, b) => b.scrollHeight - a.scrollHeight)
+        .slice(0, 8);
+      let changed = false;
+      for (const el of candidates) {
+        const before = el.scrollTop;
+        el.scrollTop = Math.min(el.scrollHeight, el.scrollTop + Math.max(420, el.clientHeight * 0.8));
+        if (el.scrollTop !== before) changed = true;
+      }
+      const beforeWindow = window.scrollY;
+      window.scrollBy(0, Math.max(500, window.innerHeight * 0.8));
+      if (window.scrollY !== beforeWindow) changed = true;
+      return changed;
+    });
+
+    await sleep(220);
+    if (!moved && pass >= 3) break;
+  }
+
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    for (const el of document.querySelectorAll("div,main,section,[role='grid'],[role='table']")) {
+      if (el.scrollHeight > el.clientHeight + 100) el.scrollTop = 0;
+    }
+  }).catch(() => {});
+
+  return selectorDefs.map(def => ({
+    name: def.name,
+    emails: [...buckets.get(def.name)].sort(),
+    rejected_multi_email_rows: rejectedMultiEmailRows.get(def.name)
+  }));
+}
+
+function chooseTrustedMemberEmails({ memberCountHint, strictSources, domEmails, rowEmails, htmlEmails, networkEmails }) {
+  const candidates = [];
+  for (const source of strictSources) {
+    if (source.emails.length) candidates.push({ name: `strict:${source.name}`, emails: source.emails, priority: 1 });
+  }
+
+  // Fallback sources are only trusted if their unique count exactly matches
+  // Canva's own visible member count. They are never merged together.
+  if (domEmails.length) candidates.push({ name: "dom", emails: domEmails, priority: 10 });
+  if (rowEmails.length) candidates.push({ name: "broad_rows", emails: rowEmails, priority: 11 });
+  if (htmlEmails.length) candidates.push({ name: "html", emails: htmlEmails, priority: 12 });
+  if (networkEmails.length) candidates.push({ name: "network", emails: networkEmails, priority: 13 });
+
+  if (memberCountHint > 0) {
+    const exact = candidates
+      .filter(x => x.emails.length === memberCountHint)
+      .sort((a, b) => a.priority - b.priority);
+    if (exact.length) return { trusted: true, source: exact[0].name, emails: exact[0].emails, candidates };
+
+    const strictNonEmpty = candidates
+      .filter(x => x.name.startsWith("strict:") && x.emails.length > 0)
+      .sort((a, b) => Math.abs(a.emails.length - memberCountHint) - Math.abs(b.emails.length - memberCountHint) || a.priority - b.priority);
+
+    return {
+      trusted: false,
+      source: strictNonEmpty[0]?.name || "none",
+      emails: strictNonEmpty[0]?.emails || [],
+      candidates
+    };
+  }
+
+  // Without a member-count hint, prefer the narrowest strict source. We still
+  // mark it untrusted so Auto Remove remains disabled for the run.
+  const strict = candidates.filter(x => x.name.startsWith("strict:")).sort((a,b) => a.priority - b.priority);
+  return { trusted: false, source: strict[0]?.name || "none", emails: strict[0]?.emails || [], candidates };
+}
+
 async function closeMemberDetail(page) {
   const closePatterns = [/^close$/i, /^tutup$/i, /close dialog/i, /tutup dialog/i];
   for (const pattern of closePatterns) {
@@ -578,60 +713,93 @@ async function processAccount(supabase, account) {
       return;
     }
 
-    // Canva frequently renders the visible member row without exposing the email
-    // as plain text. Collect from DOM + full HTML + JSON/GraphQL responses.
+    // v6.5: keep broad collectors for diagnostics, but DO NOT merge them.
+    // Merging DOM/HTML/network was the reason a team with 11 members could be
+    // reported as 28 emails. First collect visible one-member rows by selector.
+    const strictSources = await collectStrictMemberRowSources(page);
     const domEmails = await scanMemberEmails(page);
     const rowEmails = await collectEmailsFromMemberRows(page);
-    await sleep(1000);
+    await sleep(700);
     let expandedEmails = [];
     if (!domEmails.length && !rowEmails.length && networkCollector.found.size === 0) {
       expandedEmails = await collectEmailsByOpeningMemberRows(page);
     }
     const htmlEmails = extractEmails(await page.content().catch(() => ""));
-    const memberEmails = [...new Set([
-      ...domEmails,
-      ...rowEmails,
-      ...expandedEmails,
-      ...htmlEmails,
-      ...networkCollector.found
-    ])].sort();
+    const networkEmails = [...networkCollector.found].sort();
 
+    const selection = chooseTrustedMemberEmails({
+      memberCountHint,
+      strictSources,
+      domEmails,
+      rowEmails,
+      htmlEmails,
+      networkEmails
+    });
+    const memberEmails = selection.emails;
     detected = memberEmails.length;
+
     console.log(`[scan] member_count_hint=${memberCountHint}`);
+    for (const source of strictSources) {
+      console.log(`[scan] strict_${source.name}=${source.emails.length}; rejected_multi=${source.rejected_multi_email_rows}`);
+    }
     console.log(`[scan] dom_emails=${domEmails.length}`);
     console.log(`[scan] row_emails=${rowEmails.length}`);
     console.log(`[scan] expanded_row_emails=${expandedEmails.length}`);
     console.log(`[scan] html_emails=${htmlEmails.length}`);
-    console.log(`[scan] network_emails=${networkCollector.found.size}`);
+    console.log(`[scan] network_emails=${networkEmails.length}`);
     console.log(`[scan] network_sources=${networkCollector.sources.length}`);
-    console.log(`[scan] detected=${detected}`);
+    console.log(`[scan] selected_source=${selection.source}`);
+    console.log(`[scan] selected_count=${detected}`);
+    console.log(`[scan] trusted=${selection.trusted}`);
 
-    // Never replace a previously-good snapshot with an empty scan.
+    const diagnostic = {
+      url: finalUrl,
+      title: pageTitle,
+      member_count_hint: memberCountHint,
+      strict_sources: strictSources.map(x => ({ name: x.name, count: x.emails.length, rejected_multi_email_rows: x.rejected_multi_email_rows })),
+      dom_email_count: domEmails.length,
+      row_email_count: rowEmails.length,
+      expanded_row_email_count: expandedEmails.length,
+      html_email_count: htmlEmails.length,
+      network_email_count: networkEmails.length,
+      network_sources_count: networkCollector.sources.length,
+      selected_source: selection.source,
+      selected_count: detected,
+      trusted: selection.trusted
+    };
+
     if (!detected) {
-      const diagnostic = {
-        url: finalUrl,
-        title: pageTitle,
-        member_count_hint: memberCountHint,
-        dom_email_count: domEmails.length,
-        row_email_count: rowEmails.length,
-        expanded_row_email_count: expandedEmails.length,
-        html_email_count: htmlEmails.length,
-        network_email_count: networkCollector.found.size,
-        network_sources_count: networkCollector.sources.length
-      };
       const error = memberCountHint > 0 ? "member_emails_hidden" : "member_scan_empty";
       console.log(`[scan] ${error}; final_url=${finalUrl}; title=${pageTitle}`);
       await audit(supabase, account.id, null, null, error, diagnostic);
+      await updateAccountScan(supabase, account.id, { total: memberCountHint || 0, unauthorized: 0, removed: 0, error });
+      await notifyAdmins(
+        memberCountHint > 0
+          ? `Canva Checker: ${account.name} melihat ${memberCountHint} anggota, tetapi belum mendapat daftar email yang bisa dipercaya. Auto-remove dilewati.`
+          : `Canva Checker: ${account.name} tidak menemukan email anggota. Snapshot lama tidak dihapus.`
+      );
+      return;
+    }
+
+    // If Canva says 11 members but every candidate source disagrees, never
+    // overwrite the good snapshot and never perform removals. This is a hard
+    // safety gate against false positives such as the prior 28-email scan.
+    if (!selection.trusted) {
+      const error = memberCountHint > 0
+        ? `member_count_mismatch:${detected}!=${memberCountHint}`
+        : "member_count_unverified";
+      console.log(`[scan] ${error}; source=${selection.source}`);
+      console.log(`[scan] candidate_counts=${selection.candidates.map(x => `${x.name}:${x.emails.length}`).join(",")}`);
+      await audit(supabase, account.id, null, null, "member_scan_untrusted", diagnostic);
       await updateAccountScan(supabase, account.id, {
-        total: memberCountHint || 0,
+        total: memberCountHint || detected,
         unauthorized: 0,
         removed: 0,
         error
       });
       await notifyAdmins(
-        memberCountHint > 0
-          ? `Canva Checker: ${account.name} mendeteksi sekitar ${memberCountHint} anggota, tetapi Canva tidak mengekspos email anggota ke DOM/detail yang dapat dibaca. Auto-remove dilewati.`
-          : `Canva Checker: ${account.name} tidak menemukan email anggota. Snapshot lama tidak dihapus. Cek Members URL/session. URL saat scan: ${page.url()}`
+        `Canva Checker — ${account.name}\nCanva menampilkan ${memberCountHint || "?"} anggota, tetapi sumber email terbaik berisi ${detected}. ` +
+        `Scan ditandai TIDAK TERPERCAYA dan Auto Remove diblokir. Sumber: ${selection.source}.`
       );
       return;
     }
@@ -642,7 +810,7 @@ async function processAccount(supabase, account) {
     const minSafe = previousTotal > 0
       ? Math.max(1, Math.floor(previousTotal * 0.6))
       : 1;
-    const destructiveAllowed = detected >= minSafe;
+    const destructiveAllowed = selection.trusted && detected >= minSafe;
 
     for (const [email, grant] of activeByEmail) {
       const seen = memberEmails.includes(email);
