@@ -1,0 +1,16 @@
+{
+  "name": "canva-telegram-miniapp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "worker": "node worker/check-canva.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "playwright": "^1.55.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

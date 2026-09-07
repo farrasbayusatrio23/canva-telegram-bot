@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Canva Team Access</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root{font-family:Inter,system-ui,Arial,sans-serif}
+    body{margin:0;background:var(--tg-theme-bg-color,#f7f7f8);color:var(--tg-theme-text-color,#111)}
+    .wrap{max-width:520px;margin:0 auto;padding:24px 18px 40px}
+    .card{background:var(--tg-theme-secondary-bg-color,#fff);border-radius:20px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,.06)}
+    h1{margin:0 0 8px;font-size:24px} p{line-height:1.5;opacity:.8}
+    label{display:block;font-size:13px;margin:18px 0 8px;font-weight:700}
+    input{width:100%;box-sizing:border-box;padding:14px 15px;border-radius:12px;border:1px solid #d7d7dc;font-size:16px}
+    button,.linkbtn{width:100%;box-sizing:border-box;border:0;border-radius:12px;padding:14px 16px;font-size:16px;font-weight:700;margin-top:12px;cursor:pointer;text-align:center;text-decoration:none;display:block}
+    button{background:var(--tg-theme-button-color,#7d2ae8);color:var(--tg-theme-button-text-color,#fff)}
+    .linkbtn{background:#111;color:#fff}.muted{font-size:12px;opacity:.65}
+    .msg{margin-top:14px;border-radius:12px;padding:12px;display:none;white-space:pre-wrap}
+    .ok{background:#e8f7ee;color:#146c38}.err{background:#fdecec;color:#a12622}
+    .row{padding:12px 0;border-top:1px solid rgba(120,120,120,.18);font-size:14px}
+  </style>
+</head>
+<body>
+<div class="wrap"><div class="card">
+  <h1>Gabung Canva Team</h1>
+  <p>Masukkan email yang digunakan pada akun Canva.</p>
+  <label for="email">Email Canva</label>
+  <input id="email" type="email" placeholder="nama@gmail.com">
+  <button id="submit">Simpan & Ambil Link Undangan</button>
+  <div id="msg" class="msg"></div>
+  <a id="invite" class="linkbtn" style="display:none" target="_blank" rel="noopener">Buka Link Undangan Canva</a>
+  <p class="muted">Gunakan email Canva yang sama dengan email yang kamu daftarkan.</p>
+  <button id="refresh" type="button">Cek Status Saya</button>
+  <div id="rows"></div>
+</div></div>
+<script>
+const tg=window.Telegram?.WebApp; tg?.ready(); tg?.expand();
+const initData=tg?.initData||"";
+const msg=document.getElementById("msg"), invite=document.getElementById("invite");
+function show(text,ok=true){msg.style.display="block";msg.className="msg "+(ok?"ok":"err");msg.textContent=text}
+async function register(){
+  const email=document.getElementById("email").value.trim();
+  if(!email)return show("Masukkan email terlebih dahulu.",false);
+  try{
+    const r=await fetch("/api/register",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email,initData})});
+    const data=await r.json(); if(!data.ok)throw new Error(data.message||data.error||"Gagal");
+    show("Email berhasil disimpan. Link undangan juga dikirim ke Telegram.");
+    invite.href=data.inviteUrl; invite.style.display="block"; await status();
+  }catch(e){show("Gagal: "+e.message+"\n\nPastikan Mini App dibuka dari bot Telegram.",false)}
+}
+async function status(){
+  const rows=document.getElementById("rows"); rows.textContent="Memuat status...";
+  try{
+    const r=await fetch("/api/status",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({initData})});
+    const data=await r.json(); if(!data.ok)throw new Error(data.error||"Gagal");
+    rows.innerHTML="";
+    if(!data.rows.length){rows.textContent="Belum ada email terdaftar.";return}
+    for(const x of data.rows){const el=document.createElement("div");el.className="row";el.textContent=`${x.email} — ${x.status}`;rows.appendChild(el)}
+  }catch(e){rows.textContent="Status belum dapat dimuat."}
+}
+document.getElementById("submit").onclick=register;
+document.getElementById("refresh").onclick=status;
+if(initData)status();
+</script>
+</body></html>
