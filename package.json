@@ -1,12 +1,14 @@
 {
   "name": "canva-access-manager-v6",
-  "version": "6.3.0",
+  "version": "6.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "worker": "node worker/check-canva.js",
     "worker:once": "node worker/check-canva.js --once",
-    "export-session": "node tools/export-session.js"
+    "export-session": "node tools/export-session.js",
+    "worker:local": "node --env-file=.env.local worker/check-canva.js",
+    "worker:local:once": "node --env-file=.env.local worker/check-canva.js --once"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

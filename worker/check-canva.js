@@ -11,6 +11,25 @@ import { getAdminIds } from "../lib/telegramAuth.js";
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+
+function getCdpMap() {
+  const map = new Map();
+  const raw = String(process.env.CANVA_CDP_MAP || "");
+  for (const part of raw.split(/[\n,]/)) {
+    const idx = part.indexOf("=");
+    if (idx <= 0) continue;
+    const slug = part.slice(0, idx).trim().toLowerCase();
+    const url = part.slice(idx + 1).trim();
+    if (slug && url) map.set(slug, url);
+  }
+  return map;
+}
+
+function getCdpUrl(account) {
+  const map = getCdpMap();
+  return map.get(String(account.slug || "").toLowerCase()) || String(process.env.CANVA_CDP_URL || "").trim();
+}
+
 function extractEmails(value) {
   return [...new Set((String(value || "").match(EMAIL_RE) || []).map(x => x.toLowerCase()))];
 }
@@ -477,11 +496,30 @@ async function processAccount(supabase, account) {
     (account.protected_emails || []).map(email => String(email).toLowerCase())
   );
 
-  const statePath = await downloadState(supabase, account);
-  const headless = String(process.env.HEADLESS || "true").toLowerCase() !== "false";
-  const browser = await chromium.launch({ headless });
-  const context = await browser.newContext({ storageState: statePath });
-  const page = await context.newPage();
+  const browserMode = String(process.env.CHECKER_BROWSER_MODE || "storage").trim().toLowerCase();
+  let statePath = null;
+  let browser = null;
+  let page = null;
+  let closeBrowserWhenDone = true;
+
+  if (browserMode === "cdp") {
+    const cdpUrl = getCdpUrl(account);
+    if (!cdpUrl) throw new Error(`CDP URL belum diatur untuk slug ${account.slug}. Isi CANVA_CDP_MAP.`);
+    console.log(`[browser] mode=cdp; account=${account.slug}; url=${cdpUrl}`);
+    browser = await chromium.connectOverCDP(cdpUrl);
+    const context = browser.contexts()[0];
+    if (!context) throw new Error("Chrome CDP tidak memiliki browser context.");
+    page = await context.newPage();
+    closeBrowserWhenDone = false;
+  } else {
+    statePath = await downloadState(supabase, account);
+    const headless = String(process.env.HEADLESS || "true").toLowerCase() !== "false";
+    console.log(`[browser] mode=storage; headless=${headless}`);
+    browser = await chromium.launch({ headless });
+    const context = await browser.newContext({ storageState: statePath });
+    page = await context.newPage();
+  }
+
   const networkCollector = attachNetworkEmailCollector(page);
 
   let detected = 0;
@@ -507,6 +545,21 @@ async function processAccount(supabase, account) {
 
     console.log(`[scan] url=${finalUrl}`);
     console.log(`[scan] title=${pageTitle}`);
+
+
+    const challengePage = /just a moment|checking your browser|verify you are human|security check|captcha/i.test(`${pageTitle}\n${bodyText}`);
+    if (challengePage) {
+      const error = "security_challenge";
+      console.log(`[scan] ${error}; browser_mode=${browserMode}`);
+      await audit(supabase, account.id, null, null, error, { url: finalUrl, title: pageTitle, browser_mode: browserMode });
+      await updateAccountScan(supabase, account.id, { total: Number(account.last_scan_total || 0), unauthorized: 0, removed: 0, error });
+      await notifyAdmins(
+        browserMode === "cdp"
+          ? `Canva Checker: ${account.name} masih menampilkan halaman verifikasi keamanan. Buka Chrome profile checker dan selesaikan verifikasi secara manual, lalu scan lagi.`
+          : `Canva Checker: ${account.name} diblokir halaman verifikasi keamanan pada browser cloud/headless. Gunakan Local Checker Agent dengan Chrome normal.`
+      );
+      return;
+    }
 
     // Do not use a loose body-text "login" check; authenticated Canva pages can
     // contain those words in unrelated UI. Only treat it as re-auth when the URL
@@ -712,12 +765,15 @@ async function processAccount(supabase, account) {
       autoRemove: account.auto_remove
     });
   } finally {
-    await browser.close();
-    await fs.unlink(statePath).catch(() => {});
+    try { if (page) await page.close(); } catch {}
+    if (closeBrowserWhenDone && browser) {
+      try { await browser.close(); } catch {}
+    }
+    if (statePath) await fs.unlink(statePath).catch(() => {});
   }
 }
 
-async function runOnce() {
+async function runOnce(selectedAccountOverride = "") {
   const supabase = getSupabase();
   await markExpired(supabase);
 
@@ -727,7 +783,7 @@ async function runOnce() {
     .eq("is_active", true)
     .order("created_at");
 
-  const selectedAccountId = String(process.env.CANVA_ACCOUNT_ID || "").trim();
+  const selectedAccountId = String(selectedAccountOverride || process.env.CANVA_ACCOUNT_ID || "").trim();
   if (selectedAccountId) {
     query = query.eq("id", selectedAccountId);
   }
@@ -761,16 +817,68 @@ async function runOnce() {
   }
 }
 
+async function claimPendingRequest(supabase) {
+  const { data: pending, error } = await supabase
+    .from("canva_scan_requests")
+    .select("id,account_id")
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!pending) return null;
+
+  const { data, error: claimError } = await supabase
+    .from("canva_scan_requests")
+    .update({ status: "running", started_at: new Date().toISOString(), error: null })
+    .eq("id", pending.id)
+    .eq("status", "pending")
+    .select("id,account_id")
+    .maybeSingle();
+  if (claimError) throw claimError;
+  return data || null;
+}
+
+async function processPendingRequests() {
+  if (String(process.env.CHECKER_BROWSER_MODE || "").toLowerCase() !== "cdp") return;
+  const supabase = getSupabase();
+  for (let i = 0; i < 5; i++) {
+    const request = await claimPendingRequest(supabase);
+    if (!request) break;
+    console.log(`[request] scan ${request.id} account=${request.account_id}`);
+    try {
+      await runOnce(request.account_id);
+      await supabase.from("canva_scan_requests").update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        error: null
+      }).eq("id", request.id);
+    } catch (err) {
+      console.error(`[request ${request.id}]`, err);
+      await supabase.from("canva_scan_requests").update({
+        status: "failed",
+        completed_at: new Date().toISOString(),
+        error: String(err?.message || err)
+      }).eq("id", request.id);
+    }
+  }
+}
+
 const once = process.argv.includes("--once");
 const interval = Math.max(
   60 * 60 * 1000,
   Number(process.env.CHECK_INTERVAL_MS || 24 * 60 * 60 * 1000)
 );
+const requestPollMs = Math.max(5000, Number(process.env.SCAN_REQUEST_POLL_MS || 15000));
 
 await runOnce();
+if (!once && String(process.env.CHECKER_BROWSER_MODE || "").toLowerCase() === "cdp") {
+  await processPendingRequests().catch(err => console.error("[request poll]", err));
+}
 
 if (!once) {
-  setInterval(() => {
-    runOnce().catch(err => console.error("[checker]", err));
-  }, interval);
+  setInterval(() => runOnce().catch(err => console.error("[checker]", err)), interval);
+  if (String(process.env.CHECKER_BROWSER_MODE || "").toLowerCase() === "cdp") {
+    setInterval(() => processPendingRequests().catch(err => console.error("[request poll]", err)), requestPollMs);
+  }
 }

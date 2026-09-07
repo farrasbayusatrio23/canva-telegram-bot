@@ -414,3 +414,23 @@ $$;
 
 revoke all on function public.redeem_canva_token_v2(text,bigint,text,text,text) from public, anon, authenticated;
 grant execute on function public.redeem_canva_token_v2(text,bigint,text,text,text) to service_role;
+
+
+-- v6.4: manual scan queue for the local Chrome agent.
+create table if not exists public.canva_scan_requests (
+  id uuid primary key default gen_random_uuid(),
+  account_id uuid not null references public.canva_accounts(id) on delete cascade,
+  requested_by_telegram_id bigint,
+  status text not null default 'pending' check (status in ('pending','running','completed','failed')),
+  error text,
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  completed_at timestamptz
+);
+
+create index if not exists canva_scan_requests_pending_idx
+  on public.canva_scan_requests(status, created_at);
+
+alter table public.canva_scan_requests enable row level security;
+revoke all on public.canva_scan_requests from anon, authenticated;
+grant all on public.canva_scan_requests to service_role;

@@ -230,6 +230,7 @@ $('loadTeamEmails').onclick=()=>withLoading($('loadTeamEmails'),'Menjalankan sca
       return;
     }
     const previous=trigger.previous_scan_at||before.account?.last_scan_at||null;
+    renderTeamEmails(before,trigger.mode==='local'?'Permintaan scan dikirim ke Local Checker Agent...':'GitHub checker dimulai...');
     for(let i=0;i<36;i++){
       await wait(5000);
       const latest=await adminApi('team_emails',{account_id:accountId});
@@ -242,7 +243,7 @@ $('loadTeamEmails').onclick=()=>withLoading($('loadTeamEmails'),'Menjalankan sca
       if(i%3===2)renderTeamEmails(latest,`Checker sedang berjalan... ${Math.round((i+1)*5)} detik`);
     }
     const latest=await adminApi('team_emails',{account_id:accountId});
-    renderTeamEmails(latest,'Checker masih berjalan di GitHub Actions. Tekan tombol lagi 1-2 menit kemudian jika daftar belum berubah.');
+    renderTeamEmails(latest,'Checker masih berjalan. Tekan tombol lagi 1-2 menit kemudian jika daftar belum berubah.');
   }catch(e){
     $('teamEmailMeta').textContent='Gagal memuat daftar email tim.';
     $('teamEmailList').innerHTML=`<div class="muted">${esc(e.message)}</div>`;

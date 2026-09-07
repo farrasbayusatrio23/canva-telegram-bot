@@ -34,6 +34,21 @@ function isHttpUrl(v) {
 }
 
 
+
+async function queueLocalChecker(supabase, accountId, adminId) {
+  const { data, error } = await supabase
+    .from("canva_scan_requests")
+    .insert({
+      account_id: accountId,
+      requested_by_telegram_id: adminId,
+      status: "pending"
+    })
+    .select("id,status,created_at")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 async function triggerGithubChecker(accountId) {
   const token = String(process.env.GITHUB_ACTIONS_TOKEN || "").trim();
   const repo = String(process.env.GITHUB_REPO || "").trim();
@@ -139,11 +154,25 @@ export default async function handler(req, res) {
         .single();
       if (error) throw error;
 
-      await triggerGithubChecker(accountId);
+      const mode = String(process.env.CHECKER_TRIGGER_MODE || "github").trim().toLowerCase();
+      if (mode === "local") {
+        const request = await queueLocalChecker(supabase, accountId, admin.id);
+        return res.status(200).json({
+          ok: true,
+          triggered: true,
+          mode: "local",
+          request_id: request.id,
+          account_id: account.id,
+          account_name: account.name,
+          previous_scan_at: account.last_scan_at || null
+        });
+      }
 
+      await triggerGithubChecker(accountId);
       return res.status(200).json({
         ok: true,
         triggered: true,
+        mode: "github",
         account_id: account.id,
         account_name: account.name,
         previous_scan_at: account.last_scan_at || null
