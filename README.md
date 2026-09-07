@@ -1,35 +1,87 @@
-# Canva Access Manager v5
+# Canva Access Manager v6
 
-v5 memperbaiki bug aktivasi token setelah email dikirim.
+## Bug utama yang diperbaiki
 
-## Bug yang diperbaiki
-Flow token sebelumnya berhasil sampai "Token valid", lalu gagal ketika email dikirim karena tahap kedua memanggil RPC database. SQL lama menggunakan `RETURNS TABLE` dengan nama output yang sama seperti beberapa nama kolom. Pada PL/pgSQL ini dapat menyebabkan referensi kolom menjadi ambigu pada saat redeem.
+Versi v5 memiliki bug pada regex email di `worker/check-canva.js`: karakter `\b` berubah menjadi karakter backspace tersembunyi. Akibatnya checker selalu mendapatkan **0 email**, walaupun Canva menampilkan anggota.
 
-v5 memakai `redeem_canva_token_v2` yang:
-- menerima email sebagai `text`,
-- mengembalikan satu `jsonb`,
-- menghindari output-variable collision,
-- tetap melakukan redeem secara atomik dengan row lock,
-- tetap menambah durasi jika email yang sama memperpanjang paket.
+v6 mengganti regex dengan regex email yang valid dan menambah beberapa sumber pembacaan DOM:
 
-## Upgrade dari v3/v4
-1. Supabase -> SQL Editor.
-2. Jalankan seluruh file `sql/fix-redeem-v5.sql`.
-3. Replace project GitHub dengan v5.
-4. Redeploy Vercel menggunakan Environment Variables yang sekarang.
-5. Buat TOKEN BARU untuk test pertama.
+- body `innerText`
+- body `textContent`
+- link `mailto:`
+- `aria-label`
+- `title`
+- nilai input
+- scrolling pada area virtualized/table/grid
 
-## Jika masih gagal
-Admin Telegram akan menerima detail error database langsung pada chat jika akun Telegram tersebut masuk `ADMIN_TELEGRAM_IDS`. Detail juga dicetak ke Vercel Function Logs dengan prefix:
+## Tombol Cek daftar email tim
 
-- `[telegram redeem]`
-- `[redeem]`
+Di v6 tombol ini dapat:
 
-## Fitur lain
-- Multi akun Canva.
-- Paket dan token per akun.
-- Mini App user/admin.
-- Tombol loading dan animasi tekan.
-- Daftar email tim dari hasil checker.
-- Checker harian GitHub Actions.
-- Auto-remove per akun dengan protected email dan safety gate.
+1. Menampilkan snapshot email terakhir dari Supabase.
+2. Menjalankan GitHub Actions checker khusus akun yang dipilih.
+3. Polling hasil scan sampai checker selesai.
+4. Menampilkan daftar email hasil scan di Mini App.
+
+Agar tombol dapat menjalankan checker langsung, tambahkan Environment Variables berikut di Vercel:
+
+```env
+GITHUB_ACTIONS_TOKEN=github_pat_xxxxxxxxx
+GITHUB_REPO=OWNER/NAMA_REPO
+GITHUB_BRANCH=main
+GITHUB_CHECKER_WORKFLOW=canva-checker.yml
+```
+
+`GITHUB_ACTIONS_TOKEN` sebaiknya Fine-grained Personal Access Token yang hanya memiliki akses ke repository project ini dan permission **Actions: Read and write**.
+
+Jangan kirim token GitHub kepada orang lain dan jangan menaruhnya di frontend.
+
+## GitHub Actions Secrets
+
+Repository GitHub tetap membutuhkan:
+
+```text
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+TELEGRAM_BOT_TOKEN
+ADMIN_TELEGRAM_IDS
+```
+
+## Upgrade dari v5
+
+Tidak ada tabel baru jika `canva_member_snapshots` sudah dibuat oleh v5. Tetapi aman untuk menjalankan ulang:
+
+`sql/schema.sql`
+
+Kemudian replace project GitHub dengan v6 dan redeploy Vercel.
+
+## Test yang disarankan
+
+1. Auto Remove **OFF** dulu.
+2. Pastikan akun Canva memiliki Members URL yang benar.
+3. Pastikan session file ada di bucket private Supabase.
+4. Buka Admin -> Daftar email di tim.
+5. Pilih akun Canva.
+6. Tekan **Cek daftar email tim**.
+7. Tunggu GitHub Actions selesai. Mini App akan polling hasil hingga sekitar 3 menit.
+8. Pastikan jumlah terdeteksi sesuai Canva sebelum menyalakan Auto Remove.
+
+## Jika hasil tetap 0
+
+Lihat Admin -> Checker 24 jam. Kolom `last_scan_error` sekarang akan menunjukkan error, misalnya:
+
+- `session_needs_reauth`
+- `member_scan_empty`
+
+Jika `member_scan_empty`, cek **Audit checker**. v6 menyimpan diagnostic URL, title, dan sample body halaman untuk membantu mengetahui apakah Members URL mengarah ke halaman yang salah atau session Canva sudah tidak memiliki akses ke halaman member.
+
+## Keamanan Auto Remove
+
+Auto Remove tetap dilindungi oleh:
+
+- Protected Emails untuk Owner/Admin
+- safety gate jika jumlah member turun drastis
+- scan kosong tidak menghapus snapshot lama
+- scan kosong tidak melakukan penghapusan
+
+Aktifkan Auto Remove hanya setelah jumlah member yang terbaca sudah benar.

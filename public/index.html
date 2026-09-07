@@ -209,7 +209,45 @@ $('copyTokens').onclick=()=>withLoading($('copyTokens'),'Menyalin...',async()=>{
 window.disableToken=async id=>{if(!confirm('Nonaktifkan token ini?'))return;try{await adminApi('disable_token',{token_id:id});await refreshAdmin()}catch(e){showMsg('adminMsg',e.message,false)}};
 async function refreshAdmin(){try{const d=await adminApi('bootstrap');adminData=d;adminLoaded=true;renderAdmin()}catch(e){$('adminAuth').className='banner bad';$('adminAuth').textContent=`Admin API gagal: ${e.message}. Pastikan ADMIN_TELEGRAM_IDS dan SQL v4 sudah terpasang.`}}
 $('refreshAdmin').onclick=()=>withLoading($('refreshAdmin'),'Memuat...',refreshAdmin);
-$('loadTeamEmails').onclick=()=>withLoading($('loadTeamEmails'),'Memuat...',async()=>{const accountId=$('teamAccount').value;if(!accountId){$('teamEmailMeta').textContent='Pilih akun Canva terlebih dahulu.';$('teamEmailList').innerHTML='';return}try{const d=await adminApi('team_emails',{account_id:accountId});$('teamEmailMeta').innerHTML=`Akun: <b>${esc(d.account?.name||'-')}</b><br>Scan terakhir: ${fmt(d.account?.last_scan_at)}<br>Total email saat scan: ${d.account?.last_scan_total||0}`; if(!d.rows?.length){$('teamEmailList').innerHTML='<div class="muted">Belum ada hasil scan. Jalankan checker 24 jam / Run workflow GitHub Actions terlebih dahulu.</div>';return}$('teamEmailList').innerHTML=d.rows.map((row,i)=>`<div class="item"><div class="item-title">${i+1}. ${esc(row.email)}</div><div class="meta">Terlihat terakhir: ${fmt(row.last_seen_at)}</div></div>`).join('')}catch(e){$('teamEmailMeta').textContent='Gagal memuat daftar email tim.';$('teamEmailList').innerHTML=`<div class="muted">${esc(e.message)}</div>`}});
+function renderTeamEmails(d,note=''){
+  const account=d.account||{};
+  $('teamEmailMeta').innerHTML=`Akun: <b>${esc(account.name||'-')}</b><br>Scan terakhir: ${fmt(account.last_scan_at)}<br>Total email saat scan: ${account.last_scan_total||0}${account.last_scan_error?`<br><span style="color:#9b2724">Error checker: ${esc(account.last_scan_error)}</span>`:''}${note?`<br>${esc(note)}`:''}`;
+  if(!d.rows?.length){$('teamEmailList').innerHTML='<div class="muted">Belum ada email dari hasil scan checker.</div>';return}
+  $('teamEmailList').innerHTML=d.rows.map((row,i)=>`<div class="item"><div class="item-title">${i+1}. ${esc(row.email)}</div><div class="meta">Terlihat terakhir: ${fmt(row.last_seen_at)}</div></div>`).join('');
+}
+function wait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+$('loadTeamEmails').onclick=()=>withLoading($('loadTeamEmails'),'Menjalankan scan...',async()=>{
+  const accountId=$('teamAccount').value;
+  if(!accountId){$('teamEmailMeta').textContent='Pilih akun Canva terlebih dahulu.';$('teamEmailList').innerHTML='';return}
+  try{
+    const before=await adminApi('team_emails',{account_id:accountId});
+    renderTeamEmails(before,'Memulai scan baru...');
+    let trigger;
+    try{
+      trigger=await adminApi('trigger_scan',{account_id:accountId});
+    }catch(e){
+      renderTeamEmails(before,`Snapshot ditampilkan. Scan otomatis belum dapat dijalankan: ${e.message}`);
+      return;
+    }
+    const previous=trigger.previous_scan_at||before.account?.last_scan_at||null;
+    for(let i=0;i<36;i++){
+      await wait(5000);
+      const latest=await adminApi('team_emails',{account_id:accountId});
+      const scanAt=latest.account?.last_scan_at||null;
+      if(scanAt&&scanAt!==previous){
+        renderTeamEmails(latest,latest.account?.last_scan_error?'Scan selesai dengan error.':'Scan baru selesai.');
+        await refreshAdmin();
+        return;
+      }
+      if(i%3===2)renderTeamEmails(latest,`Checker sedang berjalan... ${Math.round((i+1)*5)} detik`);
+    }
+    const latest=await adminApi('team_emails',{account_id:accountId});
+    renderTeamEmails(latest,'Checker masih berjalan di GitHub Actions. Tekan tombol lagi 1-2 menit kemudian jika daftar belum berubah.');
+  }catch(e){
+    $('teamEmailMeta').textContent='Gagal memuat daftar email tim.';
+    $('teamEmailList').innerHTML=`<div class="muted">${esc(e.message)}</div>`;
+  }
+});
 
 (async()=>{me=await loadMe();await loadStatus();if(location.hash==='#admin')switchTab('admin')})();
 </script>

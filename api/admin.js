@@ -33,6 +33,41 @@ function isHttpUrl(v) {
   }
 }
 
+
+async function triggerGithubChecker(accountId) {
+  const token = String(process.env.GITHUB_ACTIONS_TOKEN || "").trim();
+  const repo = String(process.env.GITHUB_REPO || "").trim();
+  const ref = String(process.env.GITHUB_BRANCH || "main").trim();
+  const workflow = String(process.env.GITHUB_CHECKER_WORKFLOW || "canva-checker.yml").trim();
+
+  if (!token || !repo) {
+    throw Object.assign(new Error("GitHub scan belum dikonfigurasi. Isi GITHUB_ACTIONS_TOKEN dan GITHUB_REPO di Vercel."), { status: 400 });
+  }
+  if (!/^[^/]+\/[^/]+$/.test(repo)) {
+    throw Object.assign(new Error("GITHUB_REPO harus berbentuk owner/repository."), { status: 400 });
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
+    method: "POST",
+    headers: {
+      "accept": "application/vnd.github+json",
+      "authorization": `Bearer ${token}`,
+      "content-type": "application/json",
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "canva-access-manager"
+    },
+    body: JSON.stringify({
+      ref,
+      inputs: { account_id: accountId }
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw Object.assign(new Error(`Gagal menjalankan GitHub checker (${response.status}). ${text.slice(0, 300)}`), { status: 502 });
+  }
+}
+
 async function bootstrap(supabase) {
   const [accounts, packages, tokens, access, audits] = await Promise.all([
     supabase.from("canva_accounts").select("*").order("created_at"),
@@ -88,6 +123,30 @@ export default async function handler(req, res) {
         ok: true,
         account: accountRes.data,
         rows: membersRes.data || []
+      });
+    }
+
+    if (action === "trigger_scan") {
+      const accountId = String(body.account_id || "").trim();
+      if (!accountId) {
+        return res.status(400).json({ ok: false, error: "account_required", message: "Pilih akun Canva terlebih dahulu." });
+      }
+
+      const { data: account, error } = await supabase
+        .from("canva_accounts")
+        .select("id,name,last_scan_at")
+        .eq("id", accountId)
+        .single();
+      if (error) throw error;
+
+      await triggerGithubChecker(accountId);
+
+      return res.status(200).json({
+        ok: true,
+        triggered: true,
+        account_id: account.id,
+        account_name: account.name,
+        previous_scan_at: account.last_scan_at || null
       });
     }
 
