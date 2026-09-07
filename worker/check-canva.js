@@ -145,6 +145,45 @@ async function collectEmailsFromDom(page) {
   return extractEmails(raw);
 }
 
+
+function attachNetworkEmailCollector(page) {
+  const found = new Set();
+  const sources = [];
+
+  page.on("response", async response => {
+    try {
+      const url = response.url();
+      if (!/canva\.(com|cn)/i.test(url)) return;
+
+      const headers = response.headers();
+      const contentType = String(headers["content-type"] || "");
+      const looksRelevant = /member|members|people|team|teams|user|users|graphql|profile|access/i.test(url);
+      const isTextLike = /json|text|javascript|graphql|html/i.test(contentType);
+      if (!looksRelevant && !isTextLike) return;
+
+      const contentLength = Number(headers["content-length"] || 0);
+      if (contentLength > 4_000_000) return;
+
+      const text = await response.text().catch(() => "");
+      if (!text || text.length > 4_000_000) return;
+
+      const emails = extractEmails(text);
+      if (!emails.length) return;
+
+      for (const email of emails) found.add(email);
+      sources.push({
+        url: url.slice(0, 300),
+        status: response.status(),
+        count: emails.length
+      });
+    } catch {
+      // Some responses cannot be read after navigation. Ignore them.
+    }
+  });
+
+  return { found, sources };
+}
+
 async function findNextButton(page) {
   const patterns = [
     /^next$/i,
@@ -339,6 +378,7 @@ async function processAccount(supabase, account) {
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({ storageState: statePath });
   const page = await context.newPage();
+  const networkCollector = attachNetworkEmailCollector(page);
 
   let detected = 0;
   let unauthorizedCount = 0;
@@ -353,9 +393,21 @@ async function processAccount(supabase, account) {
     await sleep(6000);
 
     const bodyText = (await page.locator("body").innerText()).slice(0, 5000);
-    if (/login|log in|masuk ke canva|sign in/i.test(`${page.url()} ${bodyText}`)) {
+    const finalUrl = page.url();
+    const pageTitle = await page.title().catch(() => "");
+    const authUrl = /\/login(?:\/|\?|$)|\/signup(?:\/|\?|$)|\/auth(?:\/|\?|$)/i.test(finalUrl);
+    const hasLoginForm = await page.locator('input[type="email"], input[name*="email" i], input[autocomplete="username"]').count().catch(() => 0);
+
+    console.log(`[scan] url=${finalUrl}`);
+    console.log(`[scan] title=${pageTitle}`);
+
+    // Do not use a loose body-text "login" check; authenticated Canva pages can
+    // contain those words in unrelated UI. Only treat it as re-auth when the URL
+    // is an auth URL and a login field is actually present.
+    if (authUrl && hasLoginForm > 0) {
       const error = "session_needs_reauth";
-      await audit(supabase, account.id, null, null, error, { url: page.url() });
+      console.log(`[scan] ${error}`);
+      await audit(supabase, account.id, null, null, error, { url: finalUrl, title: pageTitle });
       await updateAccountScan(supabase, account.id, {
         total: 0,
         unauthorized: 0,
@@ -366,17 +418,38 @@ async function processAccount(supabase, account) {
       return;
     }
 
-    const memberEmails = await scanMemberEmails(page);
+    // Canva frequently renders the visible member row without exposing the email
+    // as plain text. Collect from DOM + full HTML + JSON/GraphQL responses.
+    const domEmails = await scanMemberEmails(page);
+    await sleep(1500);
+    const htmlEmails = extractEmails(await page.content().catch(() => ""));
+    const memberEmails = [...new Set([
+      ...domEmails,
+      ...htmlEmails,
+      ...networkCollector.found
+    ])].sort();
+
     detected = memberEmails.length;
+    console.log(`[scan] dom_emails=${domEmails.length}`);
+    console.log(`[scan] html_emails=${htmlEmails.length}`);
+    console.log(`[scan] network_emails=${networkCollector.found.size}`);
+    console.log(`[scan] network_sources=${networkCollector.sources.length}`);
+    console.log(`[scan] detected=${detected}`);
 
     // Never replace a previously-good snapshot with an empty scan.
     if (!detected) {
       const diagnostic = {
-        url: page.url(),
-        title: await page.title().catch(() => ""),
-        body_sample: bodyText.slice(0, 1200)
+        url: finalUrl,
+        title: pageTitle,
+        body_sample: bodyText.slice(0, 1200),
+        dom_email_count: domEmails.length,
+        html_email_count: htmlEmails.length,
+        network_email_count: networkCollector.found.size,
+        network_sources: networkCollector.sources.slice(0, 20)
       };
       const error = "member_scan_empty";
+      console.log(`[scan] ${error}; final_url=${finalUrl}; title=${pageTitle}`);
+      console.log(`[scan] page_hint=${bodyText.replace(/\s+/g, " ").slice(0, 350)}`);
       await audit(supabase, account.id, null, null, error, diagnostic);
       await updateAccountScan(supabase, account.id, {
         total: 0,
