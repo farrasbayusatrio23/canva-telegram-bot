@@ -25,7 +25,10 @@ function errorText(code) {
     TOKEN_USED: "Token sudah digunakan.",
     ACCOUNT_DISABLED: "Akun Canva tujuan sedang dinonaktifkan.",
     PACKAGE_DISABLED: "Paket sedang dinonaktifkan.",
-    EMAIL_ALREADY_BOUND: "Email tersebut masih terikat dengan akun Telegram lain. Hubungi admin."
+    EMAIL_ALREADY_BOUND: "Email tersebut masih terikat dengan akun Telegram lain. Hubungi admin.",
+    REDEEM_RPC_MISSING: "Database belum memakai SQL v5. Admin harus menjalankan sql/fix-redeem-v5.sql di Supabase.",
+    DB_REDEEM_FAILED: "Database gagal memproses aktivasi. Hubungi admin.",
+    REDEEM_EMPTY: "Aktivasi tidak mengembalikan data. Hubungi admin."
   };
   return map[code] || "Terjadi kesalahan. Coba lagi atau hubungi admin.";
 }
@@ -193,7 +196,13 @@ export default async function handler(req, res) {
         );
       } catch (err) {
         await supabase.from("telegram_states").delete().eq("telegram_user_id", user.id);
-        await sendMessage(chatId, errorText(err.message));
+        const code = err?.code || err?.message || "UNKNOWN";
+        let text = errorText(code);
+        if (isAdminTelegramId(user.id) && err?.details) {
+          text += `\n\nDetail admin: ${String(err.details).slice(0, 700)}`;
+        }
+        console.error("[telegram redeem]", { code, details: err?.details || null });
+        await sendMessage(chatId, text);
       }
       return res.status(200).json({ ok: true });
     }

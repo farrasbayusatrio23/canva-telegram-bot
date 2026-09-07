@@ -1,6 +1,6 @@
 {
-  "name": "canva-access-manager-v3",
-  "version": "3.0.0",
+  "name": "canva-access-manager-v5",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
