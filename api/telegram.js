@@ -44,7 +44,7 @@ async function sendStart(chatId, userId) {
 
   return sendMessage(
     chatId,
-    "Canva Access\n\n1. Kirim token akses (contoh: CVA-...)\n2. Bot akan meminta email Canva\n3. Setelah berhasil, kamu mendapat akun Canva tujuan, paket, masa aktif, dan link undangan.\n\nPerintah: /status /cancel",
+    "Canva Access\n\n1. Kirim token akses (contoh: CVA-...)\n2. Bot akan meminta email Canva\n3. Setelah berhasil, kamu mendapat akun Canva tujuan, paket, masa aktif, dan link undangan.\n\nPerintah: /status /cancel /id",
     { reply_markup: { inline_keyboard: rows } }
   );
 }
@@ -108,6 +108,11 @@ export default async function handler(req, res) {
 
     if (text.startsWith("/status")) {
       await sendStatus(chatId, user.id);
+      return res.status(200).json({ ok: true });
+    }
+
+    if (text.startsWith("/id")) {
+      await sendMessage(chatId, `Telegram User ID kamu: ${user.id}\n\nUntuk menjadikan akun ini admin, masukkan ID tersebut ke Environment Variable ADMIN_TELEGRAM_IDS di Vercel dan GitHub Actions Secrets.`);
       return res.status(200).json({ ok: true });
     }
 

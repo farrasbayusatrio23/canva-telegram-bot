@@ -32,6 +32,15 @@ create table if not exists public.canva_accounts (
   updated_at timestamptz not null default now()
 );
 
+
+-- Checker metadata (v3). Safe to run on an existing v2 database.
+alter table public.canva_accounts
+  add column if not exists last_scan_at timestamptz,
+  add column if not exists last_scan_total integer not null default 0,
+  add column if not exists last_scan_unauthorized integer not null default 0,
+  add column if not exists last_scan_removed integer not null default 0,
+  add column if not exists last_scan_error text;
+
 create table if not exists public.canva_packages (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,

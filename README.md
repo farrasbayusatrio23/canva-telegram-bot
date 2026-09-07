@@ -1,349 +1,226 @@
-# Canva Access Manager v2
+# Canva Access Manager v3
 
-Telegram Bot + Telegram Mini App + Supabase + Canva Checker multi-account.
+Telegram Bot + Mini App + Supabase + Vercel + GitHub Actions daily Canva checker.
 
-## Alur yang dibangun
+## Alur user
 
-### Admin
-
-1. Admin membuka Mini App dari bot.
-2. Admin membuat konfigurasi **Akun Canva 1**, **Akun Canva 2**, dst.
-3. Setiap akun punya:
-   - URL daftar member Canva
-   - link undangan publik
-   - file session Canva sendiri di Supabase Storage
-   - daftar email owner/admin yang tidak boleh dihapus
-   - switch auto-remove
-4. Admin membuat paket, misalnya 30 hari / 90 hari / 180 hari.
-5. Admin memilih **akun + paket**, lalu generate token akses.
-6. Token utuh hanya tampil sekali saat dibuat. Database hanya menyimpan hash token.
-
-### User
-
-Cara paling sederhana melalui chat Telegram:
-
-1. User kirim token seperti `CVA-...`.
-2. Bot memvalidasi token lalu meminta email Canva.
-3. User mengirim email.
-4. Token di-redeem secara atomik di Supabase.
-5. Bot mengirim:
-   - email Canva
-   - akun Canva yang didapat
-   - nama paket
-   - masa aktif
-   - link undangan publik akun tersebut
+1. User mengirim token `CVA-...` ke bot Telegram.
+2. Bot meminta email Canva.
+3. Token menentukan **akun Canva** dan **paket/durasi**.
+4. Akses disimpan ke Supabase.
+5. Bot mengirim email, nama akun Canva, paket, masa aktif, dan public invite link.
 6. `/status` menampilkan akses user.
 
-User juga dapat redeem token dari Mini App.
+Mini App juga dapat redeem token dan menampilkan status yang sama.
 
-### Checker
+## Alur admin
 
-Worker terpisah:
+Tab **Admin selalu terlihat** di Mini App. API tetap memverifikasi Telegram Mini App `initData` dan `ADMIN_TELEGRAM_IDS`, jadi user biasa tidak dapat menggunakan fungsi admin.
 
-1. Membaca semua akun Canva aktif dari Supabase.
-2. Membuka halaman member masing-masing akun memakai session file akun tersebut.
-3. Membaca email yang terlihat di daftar member.
-4. Membandingkan dengan `canva_access` yang statusnya aktif dan belum expired.
-5. Email protected tidak pernah dianggap unauthorized.
-6. Email lain yang tidak punya akses aktif dicatat ke `canva_audit`.
-7. Jika `auto_remove=true` pada akun tersebut, worker mencoba mengeluarkan member itu melalui UI Canva.
+Admin dapat:
 
-> Canva Business tidak memiliki API provisioning/removal publik yang stabil seperti Enterprise. Pengecekan/removal pada project ini memakai browser automation. UI Canva dapat berubah. Jangan mencoba melewati CAPTCHA/MFA.
+- membuat/mengedit Akun Canva 1, Akun Canva 2, dst;
+- memasang URL daftar member + public invite link per akun;
+- memilih file session Supabase per akun;
+- memasukkan email Owner/Admin yang tidak boleh dikeluarkan;
+- mengaktifkan/nonaktifkan daily checker per akun;
+- mengaktifkan Auto Remove per akun;
+- membuat paket 30/90/180 hari, dll;
+- generate token per akun + paket;
+- melihat akses user;
+- melihat hasil scan checker dan audit penghapusan.
 
----
+## Mengapa Admin sebelumnya tidak terlihat
 
-# 1. Supabase
+v3 tidak lagi menyembunyikan tombol Admin secara diam-diam. Jika akun belum diizinkan, panel menjelaskan Telegram ID mana yang harus dimasukkan ke `ADMIN_TELEGRAM_IDS`.
 
-Buka **SQL Editor** dan jalankan seluruh isi:
+Kirim ke bot:
 
-`sql/schema.sql`
+```
+/id
+```
 
-Jika sebelumnya kamu memakai project v1, tabel `canva_access` lama otomatis di-rename menjadi `canva_access_legacy_v1` agar data lama tidak dihapus.
+Lalu pasang ID tersebut di:
 
-Tabel utama v2:
+- Vercel -> Project -> Settings -> Environment Variables -> `ADMIN_TELEGRAM_IDS`
+- GitHub -> Repository -> Settings -> Secrets and variables -> Actions -> `ADMIN_TELEGRAM_IDS`
+
+Redeploy Vercel setelah mengubah Environment Variable.
+
+## 1. Upgrade database Supabase
+
+Buka Supabase -> SQL Editor. Jalankan seluruh isi:
+
+```
+sql/schema.sql
+```
+
+Script aman untuk instalasi v2: kolom checker v3 menggunakan `add column if not exists`.
+
+Tabel utama:
 
 - `canva_accounts`
 - `canva_packages`
 - `canva_access_tokens`
 - `canva_access`
-- `telegram_states`
 - `canva_audit`
+- `telegram_states`
 
-Pastikan bucket Storage private sudah ada:
+## 2. Supabase Storage session
 
-`canva-private`
+Bucket harus private:
 
----
-
-# 2. Buat session untuk setiap akun Canva
-
-Contoh Akun Canva 1.
-
-Tutup semua Chrome, lalu buka Chrome khusus:
-
-```bat
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\canva-profile-1"
+```
+canva-private
 ```
 
-Login Canva secara normal pada Chrome itu. Jangan bypass MFA/CAPTCHA.
+Contoh multi akun:
 
-Di folder project:
+```
+canva-private/
+  sessions/
+    akun-1.json
+    akun-2.json
+```
 
-```bat
+Jangan pernah membuat file session public.
+
+## 3. Export session per akun
+
+Buka Chrome khusus dengan remote debugging, login Canva secara normal, lalu:
+
+```
 npm install
 npm run export-session -- akun-1
 ```
 
-Hasil:
+File hasil:
 
-`data/akun-1.json`
-
-Upload ke Supabase Storage private:
-
-`canva-private/sessions/akun-1.json`
-
-Untuk akun kedua, ulangi dengan profile berbeda:
-
-```bat
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\canva-profile-2"
+```
+data/akun-1.json
 ```
 
-Login akun Canva 2 lalu:
+Upload ke Supabase Storage sebagai:
 
-```bat
-npm run export-session -- akun-2
+```
+sessions/akun-1.json
 ```
 
-Upload sebagai:
+Ulangi dengan akun Canva kedua dan profile/session login kedua.
 
-`canva-private/sessions/akun-2.json`
+## 4. Vercel Environment Variables
 
-Jangan upload file session ke GitHub.
+Pasang:
 
----
-
-# 3. GitHub
-
-Buat repository private lalu upload isi folder project ini.
-
-Jangan commit:
-
-- `.env`
-- `data/*.json`
-- token bot
-- Supabase service role key
-
-`.gitignore` sudah disiapkan.
-
----
-
-# 4. Vercel
-
-Import repository GitHub ke Vercel.
-
-Framework preset: **Other**.
-
-Environment Variables:
-
-```env
-SUPABASE_URL=https://xxxx.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_SIDE_SECRET
-TELEGRAM_BOT_TOKEN=123456789:AA...
-MINIAPP_URL=https://project-kamu.vercel.app
-ADMIN_TELEGRAM_IDS=123456789
 ```
-
-Jika admin lebih dari satu:
-
-```env
-ADMIN_TELEGRAM_IDS=123456789,987654321
-```
-
-`ADMIN_TELEGRAM_IDS` adalah Telegram numeric user ID, bukan username.
-
-Setelah domain Vercel tersedia, isi `MINIAPP_URL` dengan domain tersebut lalu Redeploy.
-
----
-
-# 5. Telegram webhook
-
-Endpoint webhook:
-
-`https://DOMAIN-VERCEL/api/telegram`
-
-Cara sederhana memasangnya:
-
-`https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://DOMAIN-VERCEL/api/telegram`
-
-Jangan membagikan URL yang berisi token bot.
-
-Opsional untuk keamanan tambahan, isi:
-
-```env
-TELEGRAM_WEBHOOK_SECRET=string-rahasia-random
-```
-
-Jika memakai secret webhook, set `secret_token` yang sama saat memanggil Telegram `setWebhook`.
-
----
-
-# 6. Setting akun lewat Mini App
-
-Sebagai admin kirim:
-
-`/admin`
-
-Klik **Buka Panel Admin**.
-
-Untuk Akun Canva 1 isi contoh:
-
-- Nama: `Canva 1`
-- Slug: `canva-1`
-- Members URL: URL halaman member akun/tim tersebut
-- Invite URL: link undangan publik tim tersebut
-- Storage bucket: `canva-private`
-- Session file: `sessions/akun-1.json`
-- Protected emails: email owner/admin akun Canva 1
-- Akun aktif: ON
-- Auto-remove: **OFF dulu**
-
-Untuk akun kedua:
-
-- Nama: `Canva 2`
-- Session file: `sessions/akun-2.json`
-- Members URL / Invite URL milik akun kedua
-
-Seterusnya sama.
-
----
-
-# 7. Buat paket
-
-Di Panel Admin buat, misalnya:
-
-- `30 Hari` -> 30
-- `90 Hari` -> 90
-- `180 Hari` -> 180
-
-Durasi akses dihitung ketika token diredeem.
-
-Jika user memakai token baru pada email yang sama dan aksesnya masih aktif, durasi baru akan **menambah dari tanggal expiry lama**, bukan mulai ulang dari hari ini.
-
----
-
-# 8. Generate token
-
-Di bagian **Buat token akses**:
-
-1. Pilih Akun Canva.
-2. Pilih Paket.
-3. Pilih jumlah token.
-4. `Maks. penggunaan per token = 1` untuk token sekali pakai.
-5. Generate.
-
-Contoh token:
-
-`CVA-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
-
-Token utuh hanya dikembalikan sekali oleh server saat dibuat. Database hanya menyimpan SHA-256 hash dan hint token.
-
----
-
-# 9. Penggunaan user
-
-User cukup chat ke bot:
-
-```text
-CVA-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-Bot menjawab meminta email.
-
-User:
-
-```text
-user@gmail.com
-```
-
-Bot akan menjawab contoh:
-
-```text
-Akses berhasil diaktifkan.
-
-Email: user@gmail.com
-Akun Canva: Canva 2
-Paket: 90 Hari (90 hari)
-Aktif sampai: ...
-
-Link undangan:
-https://www.canva.com/...
-```
-
-User dapat cek lagi dengan:
-
-`/status`
-
----
-
-# 10. Jalankan Canva Checker
-
-Checker **jangan dijalankan sebagai proses permanen di Vercel**. Jalankan pada Windows/VPS/Render/Railway/container yang mendukung Chromium.
-
-Install:
-
-```bash
-npm install
-npx playwright install chromium
-```
-
-Isi environment worker:
-
-```env
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 TELEGRAM_BOT_TOKEN=...
+MINIAPP_URL=https://PROJECT.vercel.app
 ADMIN_TELEGRAM_IDS=123456789
-CHECK_INTERVAL_MS=60000
-HEADLESS=true
 ```
 
-Tes satu kali:
+`SUPABASE_SERVICE_ROLE_KEY` hanya backend. Jangan ditaruh di frontend.
 
-```bash
-npm run worker:once
+## 5. Telegram webhook
+
+Set webhook ke:
+
+```
+https://DOMAIN-VERCEL/api/telegram
 ```
 
-Lihat:
+Jika menggunakan `TELEGRAM_WEBHOOK_SECRET`, set webhook dengan secret token yang sama.
 
-- output terminal
-- tabel `canva_audit`
-- `last_seen_in_canva` pada `canva_access`
+Bot commands:
 
-Pada tahap ini semua akun harus tetap:
+- `/start`
+- `/status`
+- `/admin`
+- `/id`
+- `/cancel`
 
-`auto_remove = false`
+## 6. Setting akun Canva di Admin Mini App
 
-Jika scanner sudah benar-benar membaca member sesuai akun, baru aktifkan **Auto-remove** dari Panel Admin untuk akun yang kamu inginkan.
+Untuk setiap akun isi:
 
-Jalankan terus:
+- Nama akun: `Canva 1`
+- Slug: `canva-1`
+- URL daftar anggota Canva
+- Link undangan publik
+- Bucket: `canva-private`
+- Session file: `sessions/akun-1.json`
+- Protected emails: email Owner/Admin Canva
+- Akun aktif: ON
+- Auto Remove: awalnya OFF
 
-```bash
-npm run worker
+### Penting
+
+Lakukan scan pertama dengan Auto Remove OFF. Setelah `Scan terakhir` menunjukkan jumlah member yang masuk akal, baru aktifkan Auto Remove.
+
+Worker memakai safety gate: jika scan berikutnya tiba-tiba hanya membaca kurang dari 60% jumlah member scan sebelumnya, penghapusan otomatis diblokir untuk run tersebut. Ini mengurangi risiko penghapusan salah saat UI Canva gagal memuat atau berubah.
+
+## 7. Checker otomatis setiap 24 jam via GitHub Actions
+
+File sudah tersedia:
+
+```
+.github/workflows/canva-checker.yml
 ```
 
-Interval minimum di code adalah 60 detik.
+Schedule bawaan:
 
----
+```
+0 1 * * *
+```
 
-# Safety auto-remove
+Itu berarti setiap hari pukul **08:00 WIB**.
 
-Sebelum mengaktifkan auto-remove:
+Di GitHub buka:
 
-1. Masukkan semua Owner/Admin Canva ke **Protected emails**.
-2. Pastikan URL member benar untuk masing-masing akun.
-3. Pastikan session file sesuai akun.
-4. Tes dengan `auto_remove=false`.
-5. Periksa tabel `canva_audit` dan daftar `unauthorized_detected`.
-6. Baru aktifkan auto-remove pada satu akun terlebih dahulu.
+Repository -> Settings -> Secrets and variables -> Actions
 
-Jika UI Canva berubah dan tombol remove tidak ditemukan, worker mencatat `remove_failed` daripada mencoba tindakan lain secara acak.
+Buat Repository Secrets:
+
+```
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+TELEGRAM_BOT_TOKEN
+ADMIN_TELEGRAM_IDS
+```
+
+Kemudian buka tab **Actions -> Canva Daily Checker -> Run workflow** untuk test manual pertama.
+
+GitHub Actions akan:
+
+1. install Node;
+2. install Chromium Playwright;
+3. download session akun dari private Supabase Storage;
+4. membuka URL member masing-masing akun Canva;
+5. membaca email member;
+6. menandai akses expired;
+7. membandingkan email member dengan `canva_access` aktif untuk akun tersebut;
+8. mengabaikan `protected_emails`;
+9. jika `auto_remove=ON`, mencoba mengeluarkan email yang tidak punya akses aktif;
+10. menyimpan hasil ke `canva_audit` dan `canva_accounts.last_scan_*`;
+11. mengirim ringkasan ke Telegram admin.
+
+## Aturan checker
+
+Email Canva dianggap BERIZIN jika semua benar:
+
+- ada di `canva_access` untuk akun Canva yang sedang diperiksa;
+- status `active`;
+- `ends_at` belum lewat.
+
+Email dianggap TIDAK BERIZIN jika:
+
+- sama sekali tidak ada di database untuk akun itu; atau
+- akses `expired`, `blocked`, atau `removed`; atau
+- masa paket sudah habis.
+
+Email dalam `protected_emails` tidak pernah menjadi target penghapusan.
+
+## Batasan Canva Business
+
+Canva Business tidak menyediakan API public provisioning/removal setara Canva Enterprise. Checker ini menggunakan browser automation terhadap halaman member milik akun admin. Karena UI Canva dapat berubah, fitur penghapusan dibuat konservatif, diaudit, dan memiliki safety gate. Script tidak mencoba melewati CAPTCHA atau MFA. Jika session habis, checker memberi notifikasi `session_needs_reauth` agar session diexport ulang.

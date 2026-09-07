@@ -13,8 +13,7 @@ function requireAdmin(initData) {
 
 function slugify(input) {
   return String(input || "")
-    .trim()
-    .toLowerCase()
+    .trim().toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
@@ -25,8 +24,17 @@ function asStringArray(v) {
   return String(v || "").split(/[,\n]/).map(x => x.trim().toLowerCase()).filter(Boolean);
 }
 
+function isHttpUrl(v) {
+  try {
+    const u = new URL(v);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 async function bootstrap(supabase) {
-  const [accounts, packages, tokens, access] = await Promise.all([
+  const [accounts, packages, tokens, access, audits] = await Promise.all([
     supabase.from("canva_accounts").select("*").order("created_at"),
     supabase.from("canva_packages").select("*").order("duration_days"),
     supabase.from("canva_access_tokens").select(`
@@ -34,17 +42,21 @@ async function bootstrap(supabase) {
       canva_accounts(name),canva_packages(name,duration_days)
     `).order("created_at", { ascending: false }).limit(100),
     supabase.from("canva_access").select(`
-      id,email,telegram_user_id,status,starts_at,ends_at,last_seen_in_canva,last_checked_at,
+      id,email,telegram_user_id,telegram_username,status,starts_at,ends_at,last_seen_in_canva,last_checked_at,removed_at,
       canva_accounts(name),canva_packages(name,duration_days)
-    `).order("updated_at", { ascending: false }).limit(200)
+    `).order("updated_at", { ascending: false }).limit(300),
+    supabase.from("canva_audit").select(`
+      id,email,event,details,created_at,canva_accounts(name)
+    `).order("created_at", { ascending: false }).limit(150)
   ]);
 
-  for (const r of [accounts, packages, tokens, access]) if (r.error) throw r.error;
+  for (const r of [accounts, packages, tokens, access, audits]) if (r.error) throw r.error;
   return {
     accounts: accounts.data || [],
     packages: packages.data || [],
     tokens: tokens.data || [],
-    access: access.data || []
+    access: access.data || [],
+    audits: audits.data || []
   };
 }
 
@@ -63,6 +75,7 @@ export default async function handler(req, res) {
 
     if (action === "save_account") {
       const x = body.account || {};
+      const protectedEmails = asStringArray(x.protected_emails);
       const payload = {
         name: String(x.name || "").trim(),
         slug: slugify(x.slug || x.name),
@@ -70,14 +83,20 @@ export default async function handler(req, res) {
         invite_url: String(x.invite_url || "").trim(),
         session_bucket: String(x.session_bucket || "canva-private").trim(),
         session_file: String(x.session_file || "").trim(),
-        protected_emails: asStringArray(x.protected_emails),
+        protected_emails: protectedEmails,
         auto_remove: Boolean(x.auto_remove),
         is_active: x.is_active !== false,
         updated_at: new Date().toISOString()
       };
 
       if (!payload.name || !payload.slug || !payload.members_url || !payload.invite_url || !payload.session_file) {
-        return res.status(400).json({ ok: false, error: "account_fields_required" });
+        return res.status(400).json({ ok: false, error: "account_fields_required", message: "Nama, URL member, link invite, dan session file wajib diisi." });
+      }
+      if (!isHttpUrl(payload.members_url) || !isHttpUrl(payload.invite_url)) {
+        return res.status(400).json({ ok: false, error: "invalid_url", message: "URL member atau invite tidak valid." });
+      }
+      if (payload.auto_remove && protectedEmails.length === 0) {
+        return res.status(400).json({ ok: false, error: "protected_email_required", message: "Isi minimal email Owner/Admin yang tidak boleh dikeluarkan sebelum Auto Remove diaktifkan." });
       }
 
       let q;
@@ -98,7 +117,7 @@ export default async function handler(req, res) {
         updated_at: new Date().toISOString()
       };
       if (!payload.name || !Number.isInteger(payload.duration_days) || payload.duration_days <= 0) {
-        return res.status(400).json({ ok: false, error: "package_fields_invalid" });
+        return res.status(400).json({ ok: false, error: "package_fields_invalid", message: "Nama dan durasi paket wajib valid." });
       }
 
       let q;
@@ -117,7 +136,7 @@ export default async function handler(req, res) {
       const expiresAt = body.expires_at ? new Date(body.expires_at).toISOString() : null;
 
       if (!accountId || !packageId) {
-        return res.status(400).json({ ok: false, error: "account_package_required" });
+        return res.status(400).json({ ok: false, error: "account_package_required", message: "Pilih akun Canva dan paket." });
       }
 
       const rawTokens = [];
@@ -138,8 +157,6 @@ export default async function handler(req, res) {
 
       const { error } = await supabase.from("canva_access_tokens").insert(rows);
       if (error) throw error;
-
-      // Raw tokens are intentionally returned only at creation time.
       return res.status(200).json({ ok: true, tokens: rawTokens });
     }
 
@@ -156,10 +173,9 @@ export default async function handler(req, res) {
       const allowed = new Set(["active", "expired", "removed", "blocked"]);
       const status = String(body.status || "");
       if (!allowed.has(status)) return res.status(400).json({ ok: false, error: "bad_status" });
-      const { error } = await supabase
-        .from("canva_access")
-        .update({ status, updated_at: new Date().toISOString() })
-        .eq("id", body.access_id);
+      const update = { status, updated_at: new Date().toISOString() };
+      if (status === "removed") update.removed_at = new Date().toISOString();
+      const { error } = await supabase.from("canva_access").update(update).eq("id", body.access_id);
       if (error) throw error;
       return res.status(200).json({ ok: true });
     }
@@ -167,6 +183,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: "unknown_action" });
   } catch (err) {
     console.error(err);
-    return res.status(err.status || 500).json({ ok: false, error: err.message || "server_error" });
+    return res.status(err.status || 500).json({ ok: false, error: err.message || "server_error", message: err.message || "server_error" });
   }
 }
