@@ -1,6 +1,6 @@
 {
   "name": "canva-access-manager-v6",
-  "version": "6.0.0",
+  "version": "6.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,6 @@
     "playwright": "^1.55.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

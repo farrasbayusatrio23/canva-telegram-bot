@@ -85,3 +85,8 @@ Auto Remove tetap dilindungi oleh:
 - scan kosong tidak melakukan penghapusan
 
 Aktifkan Auto Remove hanya setelah jumlah member yang terbaca sudah benar.
+
+
+## v6.1 hotfix
+- GitHub Actions memakai Node.js 22 agar Supabase Realtime memiliki native WebSocket.
+- package.json menetapkan Node >=22.
