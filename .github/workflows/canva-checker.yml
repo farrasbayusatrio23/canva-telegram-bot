@@ -1,0 +1,45 @@
+name: Canva Daily Checker
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+
+  workflow_dispatch:
+    inputs:
+      account_id:
+        description: "Optional: UUID akun Canva yang ingin discan saja"
+        required: false
+        type: string
+
+concurrency:
+  group: canva-daily-checker
+  cancel-in-progress: false
+
+jobs:
+  check-members:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Canva checker
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN_TELEGRAM_IDS: ${{ secrets.ADMIN_TELEGRAM_IDS }}
+          CANVA_ACCOUNT_ID: ${{ inputs.account_id }}
+        run: npm run worker:once
