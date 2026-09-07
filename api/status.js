@@ -12,12 +12,26 @@ export default async function handler(req, res) {
     const supabase = getSupabase();
     const { data, error } = await supabase
       .from("canva_access")
-      .select("email,status,last_seen_in_canva,last_checked_at,created_at")
+      .select(`
+        id,email,status,starts_at,ends_at,last_seen_in_canva,last_checked_at,
+        canva_accounts!inner(id,name,invite_url),
+        canva_packages!inner(id,name,duration_days)
+      `)
       .eq("telegram_user_id", auth.user.id)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    return res.status(200).json({ ok: true, rows: data || [] });
+
+    const now = Date.now();
+    const rows = (data || []).map(row => ({
+      ...row,
+      effective_status:
+        row.status === "active" && new Date(row.ends_at).getTime() <= now
+          ? "expired"
+          : row.status
+    }));
+
+    return res.status(200).json({ ok: true, rows });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ ok: false, error: "server_error" });
