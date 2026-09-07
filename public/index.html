@@ -12,7 +12,7 @@
     .wrap{max-width:980px;margin:0 auto;padding:18px 14px 52px}
     .title{font-size:25px;font-weight:900}.sub{font-size:12px;opacity:.62;margin-top:3px}
     .tabs{display:flex;gap:8px;overflow:auto;padding:14px 0 12px;position:sticky;top:0;z-index:5;background:var(--tg-theme-bg-color,#f5f6f8)}
-    .tab{border:0;border-radius:999px;padding:10px 14px;font-weight:800;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit;white-space:nowrap;cursor:pointer}
+    .tab{border:0;border-radius:999px;padding:10px 14px;font-weight:800;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit;white-space:nowrap;cursor:pointer;transition:transform .12s ease,opacity .2s ease,box-shadow .2s ease}
     .tab.active{background:var(--tg-theme-button-color,#38a5df);color:var(--tg-theme-button-text-color,#fff)}
     .panel{display:none}.panel.active{display:block}
     .card{background:var(--tg-theme-secondary-bg-color,#fff);border-radius:18px;padding:18px;margin-bottom:14px;box-shadow:0 8px 28px rgba(0,0,0,.05)}
@@ -22,7 +22,13 @@
     label{display:block;font-size:12px;font-weight:800;margin:10px 0 6px;opacity:.78}
     input,textarea,select{width:100%;border:1px solid rgba(120,120,130,.27);border-radius:12px;padding:12px 13px;font:inherit;background:var(--tg-theme-bg-color,#fff);color:inherit;outline:none}
     textarea{min-height:84px;resize:vertical}
-    button,.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:850;cursor:pointer;text-decoration:none;display:inline-block;text-align:center}
+    button,.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:850;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;text-align:center;gap:8px;transition:transform .12s ease,opacity .2s ease,box-shadow .2s ease}
+    button:active,.btn:active,.tab:active{transform:scale(.98)}
+    button:disabled{opacity:.7;cursor:not-allowed}
+    button.loading{position:relative;pointer-events:none}
+    button.loading::after{content:"";width:14px;height:14px;border:2px solid rgba(255,255,255,.55);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
+    .secondary.loading::after{border-color:rgba(0,0,0,.2);border-top-color:rgba(0,0,0,.65)}
+    @keyframes spin{to{transform:rotate(360deg)}}
     .primary{background:var(--tg-theme-button-color,#38a5df);color:var(--tg-theme-button-text-color,#fff)}
     .secondary{background:rgba(120,120,130,.12);color:inherit}.danger{background:#c63f3f;color:#fff}.full{width:100%;margin-top:12px}
     .row-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.msg{display:none;padding:12px;border-radius:12px;margin-top:12px;white-space:pre-wrap}.ok{display:block;background:#e8f7ee;color:#126733}.err{display:block;background:#fdecec;color:#9b2724}
@@ -32,6 +38,8 @@
     .banner{border-radius:14px;padding:12px;margin-bottom:14px;background:#fff3cd;color:#725a00;font-size:12px;line-height:1.55}.banner.good{background:#e8f7ee;color:#126733}.banner.bad{background:#fdecec;color:#9b2724}
     .switchline{display:flex;align-items:center;gap:8px;padding-top:10px}.switchline input{width:auto}
     .hr{height:1px;background:rgba(120,120,130,.16);margin:14px 0}.tokens{min-height:128px}
+    .mini-grid{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}@media(max-width:720px){.mini-grid{grid-template-columns:1fr}}
+    .chips{display:flex;gap:8px;flex-wrap:wrap}
   </style>
 </head>
 <body>
@@ -72,8 +80,21 @@
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><h2>Checker 24 jam</h2><button class="secondary" id="refreshAdmin">Refresh</button></div>
-        <div class="muted">GitHub Actions menjalankan checker setiap hari pukul 08:00 WIB. Checker membandingkan email anggota Canva dengan akses aktif di database. Email yang tidak terdaftar atau paketnya kedaluwarsa akan dikeluarkan jika Auto Remove aktif.</div>
+        <div class="muted">GitHub Actions menjalankan checker setiap 24 jam. Checker membandingkan email anggota Canva dengan akses aktif di database. Email yang tidak terdaftar atau paketnya kedaluwarsa akan dikeluarkan jika Auto Remove aktif.</div>
         <div id="checkerList" class="list" style="margin-top:12px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Daftar email di tim</h2>
+        <div class="mini-grid">
+          <div>
+            <label>Pilih akun Canva</label>
+            <select id="teamAccount"></select>
+          </div>
+          <button class="secondary" id="loadTeamEmails">Cek daftar email tim</button>
+        </div>
+        <div id="teamEmailMeta" class="muted" style="margin-top:10px">Belum ada data.</div>
+        <div id="teamEmailList" class="list" style="margin-top:12px"></div>
       </div>
 
       <div class="card">
@@ -84,7 +105,8 @@
           <div><label>Slug</label><input id="accSlug" placeholder="akun-canva-1"></div>
           <div><label>Session file</label><input id="accSessionFile" placeholder="sessions/akun-1.json"></div>
         </div>
-        <label>URL daftar anggota Canva</label><input id="accMembersUrl" placeholder="https://www.canva.com/..."><label>Link undangan publik</label><input id="accInviteUrl" placeholder="https://www.canva.com/brand/join?token=...">
+        <label>URL daftar anggota Canva</label><input id="accMembersUrl" placeholder="https://www.canva.com/...">
+        <label>Link undangan publik</label><input id="accInviteUrl" placeholder="https://www.canva.com/brand/join?token=...">
         <div class="grid">
           <div><label>Storage bucket</label><input id="accBucket" value="canva-private"></div>
           <div><label>Email Owner/Admin yang tidak boleh dikeluarkan</label><textarea id="accProtected" placeholder="owner@gmail.com, admin@gmail.com"></textarea></div>
@@ -92,7 +114,7 @@
         <div class="switchline"><input id="accActive" type="checkbox" checked><label for="accActive" style="margin:0">Akun aktif / ikut checker harian</label></div>
         <div class="switchline"><input id="accAutoRemove" type="checkbox"><label for="accAutoRemove" style="margin:0">Auto Remove email tidak berizin</label></div>
         <div class="row-actions"><button class="primary" id="saveAccount">Simpan Akun</button><button class="secondary" id="newAccount">Form Baru</button></div>
-        <div class="muted" style="margin-top:10px">Sebelum menyalakan Auto Remove, jalankan checker minimal sekali dengan Auto Remove OFF agar sistem punya baseline jumlah member. Email Owner/Admin wajib masuk Protected Emails.</div>
+        <div class="muted" style="margin-top:10px">Session file cukup diisi path file di Supabase Storage, misalnya <b>sessions/akun-1.json</b>. Bukan isi cookie JSON mentah.</div>
       </div>
 
       <div class="card">
@@ -130,92 +152,66 @@
   </section>
 </div>
 <script>
-const tg=window.Telegram?.WebApp; tg?.ready(); tg?.expand();
+const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand();
 const initData=tg?.initData||"";
-const unsafeUser=tg?.initDataUnsafe?.user;
 const $=id=>document.getElementById(id);
-const esc=s=>String(s??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
-const fmt=v=>{if(!v)return"-";try{return new Intl.DateTimeFormat("id-ID",{timeZone:"Asia/Jakarta",dateStyle:"medium",timeStyle:"short"}).format(new Date(v))}catch{return v}};
-function showMsg(id,text,ok=true){const e=$(id);e.className="msg "+(ok?"ok":"err");e.textContent=text}
-function switchTab(name){document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===name));document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id==="panel-"+name));if(name==="admin")ensureAdmin();}
-for(const b of document.querySelectorAll(".tab"))b.onclick=()=>switchTab(b.dataset.tab);
+const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const fmt=v=>{if(!v)return"-";try{return new Intl.DateTimeFormat("id-ID",{timeZone:"Asia/Jakarta",dateStyle:"medium",timeStyle:"short"}).format(new Date(v))}catch{return String(v)}};
+function showMsg(id,text,ok=true){const el=$(id);el.className=`msg ${ok?"ok":"err"}`;el.textContent=text}
+function setLoading(btn,on,label){if(!btn)return; if(on){btn.dataset.oldText=btn.textContent; btn.classList.add('loading'); btn.disabled=true; if(label)btn.textContent=label}else{btn.classList.remove('loading'); btn.disabled=false; btn.textContent=btn.dataset.oldText||btn.textContent}}
+async function withLoading(btn,label,fn){setLoading(btn,true,label); try{return await fn()} finally{setLoading(btn,false)}}
 
-async function api(url,body={}){
-  const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({...body,initData})});
-  const data=await r.json().catch(()=>({ok:false,error:"invalid_response"}));
-  if(!data.ok)throw new Error(data.message||data.error||"Request gagal");
-  return data;
-}
+function switchTab(name){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));$("panel-"+name).classList.add('active');if(name==='admin')ensureAdmin();location.hash='#'+name}
+document.querySelectorAll('.tab').forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));
 
-async function loadMe(){
-  if(!initData){$("who").textContent="Buka Mini App dari tombol bot Telegram";return null}
-  try{const d=await api("/api/me");$("who").textContent=`${d.user.first_name||"User"}${d.user.username?" @"+d.user.username:""} • ID ${d.user.id}${d.is_admin?" • ADMIN":""}`;return d}catch(e){$("who").textContent="Mini App tidak terverifikasi. Buka dari bot Telegram.";return null}
-}
+async function api(path,body={}){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,initData})});const data=await r.json().catch(()=>({ok:false,error:'invalid_response'}));if(!data.ok)throw new Error(data.message||data.error||'Request gagal');return data}
 
-async function loadStatus(){
-  const box=$("userAccess");
-  if(!initData){box.innerHTML='<div class="muted">Buka Mini App dari bot Telegram untuk melihat akses.</div>';return}
-  box.innerHTML='<div class="muted">Memuat...</div>';
-  try{
-    const d=await api("/api/status");
-    if(!d.rows.length){box.innerHTML='<div class="muted">Belum ada akses aktif.</div>';return}
-    box.innerHTML=d.rows.map(x=>`<div class="item"><div class="item-title">${esc(x.canva_accounts?.name||"Canva")} <span class="pill ${x.effective_status==='active'?'on':'off'}">${esc(x.effective_status)}</span></div><div class="meta">Email: <b>${esc(x.email)}</b><br>Paket: ${esc(x.canva_packages?.name||'-')} (${esc(x.canva_packages?.duration_days||'-')} hari)<br>Mulai: ${fmt(x.starts_at)}<br>Berakhir: ${fmt(x.ends_at)}<br>Terlihat di Canva: ${fmt(x.last_seen_in_canva)}</div>${x.effective_status==='active'&&x.canva_accounts?.invite_url?`<a class="btn primary full" target="_blank" rel="noopener" href="${esc(x.canva_accounts.invite_url)}">Buka Link Undangan</a>`:''}</div>`).join("");
-  }catch(e){box.innerHTML=`<div class="muted">Gagal memuat: ${esc(e.message)}</div>`}
-}
+async function loadMe(){if(!initData){$('who').textContent='Buka Mini App dari tombol bot Telegram';return null}try{const d=await api('/api/me');$('who').textContent=`${d.user.first_name||'User'}${d.user.username?' @'+d.user.username:''} • ID ${d.user.id}${d.is_admin?' • ADMIN':''}`;return d}catch(e){$('who').textContent='Mini App tidak terverifikasi. Buka dari bot Telegram.';return null}}
 
-$("redeemBtn").onclick=async()=>{
-  try{
-    const d=await api("/api/redeem",{token:$("userToken").value.trim(),email:$("userEmail").value.trim()});
-    showMsg("userMsg",`Akses aktif.\nEmail: ${d.access.email}\nAkun: ${d.access.account_name}\nPaket: ${d.access.package_name} (${d.access.duration_days} hari)\nBerakhir: ${fmt(d.access.ends_at)}`);
-    $("userToken").value="";await loadStatus();
-  }catch(e){showMsg("userMsg",e.message,false)}
-};
-$("refreshStatus").onclick=loadStatus;
+async function loadStatus(){const box=$('userAccess');if(!initData){box.innerHTML='<div class="muted">Buka Mini App dari bot Telegram untuk melihat akses.</div>';return}box.innerHTML='<div class="muted">Memuat...</div>';try{const d=await api('/api/status');if(!d.rows.length){box.innerHTML='<div class="muted">Belum ada akses aktif.</div>';return}box.innerHTML=d.rows.map(x=>`<div class="item"><div class="item-title">${esc(x.canva_accounts?.name||'Canva')} <span class="pill ${x.effective_status==='active'?'on':'off'}">${esc(x.effective_status)}</span></div><div class="meta">Email: <b>${esc(x.email)}</b><br>Paket: ${esc(x.canva_packages?.name||'-')} (${esc(x.canva_packages?.duration_days||'-')} hari)<br>Mulai: ${fmt(x.starts_at)}<br>Berakhir: ${fmt(x.ends_at)}<br>Terlihat di Canva: ${fmt(x.last_seen_in_canva)}</div>${x.effective_status==='active'&&x.canva_accounts?.invite_url?`<a class="btn primary full" target="_blank" rel="noopener" href="${esc(x.canva_accounts.invite_url)}">Buka Link Undangan</a>`:''}</div>`).join('')}catch(e){box.innerHTML=`<div class="muted">Gagal memuat: ${esc(e.message)}</div>`}}
+
+$('redeemBtn').onclick=()=>withLoading($('redeemBtn'),'Memproses...',async()=>{try{const d=await api('/api/redeem',{token:$('userToken').value.trim(),email:$('userEmail').value.trim()});showMsg('userMsg',`Akses aktif.
+Email: ${d.access.email}
+Akun: ${d.access.account_name}
+Paket: ${d.access.package_name} (${d.access.duration_days} hari)
+Berakhir: ${fmt(d.access.ends_at)}`);$('userToken').value='';await loadStatus()}catch(e){showMsg('userMsg',e.message,false)}});
+$('refreshStatus').onclick=()=>withLoading($('refreshStatus'),'Memuat...',loadStatus);
 
 let me=null,adminLoaded=false,adminData={accounts:[],packages:[],tokens:[],access:[],audits:[]};
-async function ensureAdmin(){
-  const auth=$("adminAuth"),content=$("adminContent");
-  if(!me)me=await loadMe();
-  if(!me){auth.className="banner bad";auth.textContent="Buka halaman ini dari tombol Mini App di bot Telegram.";content.style.display="none";return}
-  if(!me.is_admin){auth.className="banner bad";auth.textContent=`ID Telegram ${me.user.id} belum menjadi admin. Kirim /id ke bot, lalu tambahkan ID itu ke ADMIN_TELEGRAM_IDS di Vercel dan GitHub Secrets, kemudian redeploy.`;content.style.display="none";return}
-  auth.className="banner good";auth.textContent=`Admin aktif • Telegram ID ${me.user.id}`;content.style.display="block";
-  if(!adminLoaded)await refreshAdmin();
-}
-async function adminApi(action,payload={}){return api("/api/admin",{action,...payload})}
+async function ensureAdmin(){const auth=$('adminAuth'),content=$('adminContent');if(!me)me=await loadMe();if(!me){auth.className='banner bad';auth.textContent='Buka halaman ini dari tombol Mini App di bot Telegram.';content.style.display='none';return}if(!me.is_admin){auth.className='banner bad';auth.textContent=`ID Telegram ${me.user.id} belum menjadi admin. Kirim /id ke bot, lalu tambahkan ID itu ke ADMIN_TELEGRAM_IDS di Vercel dan GitHub Secrets, kemudian redeploy.`;content.style.display='none';return}auth.className='banner good';auth.textContent=`Admin aktif • Telegram ID ${me.user.id}`;content.style.display='block';if(!adminLoaded)await refreshAdmin()}
+async function adminApi(action,payload={}){return api('/api/admin',{action,...payload})}
 
-function renderAdmin(){
-  const a=adminData.accounts||[],p=adminData.packages||[],t=adminData.tokens||[],x=adminData.access||[],logs=adminData.audits||[];
-  $("nAccounts").textContent=a.length;$("nPackages").textContent=p.length;$("nTokens").textContent=t.length;$("nAccess").textContent=x.length;
-  const accountOpts='<option value="">+ Akun baru</option>'+a.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join("");
-  $("accountSelect").innerHTML=accountOpts;
-  $("tokenAccount").innerHTML=a.filter(v=>v.is_active).map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join("");
-  $("packageSelect").innerHTML='<option value="">+ Paket baru</option>'+p.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join("");
-  $("tokenPackage").innerHTML=p.filter(v=>v.is_active).map(v=>`<option value="${v.id}">${esc(v.name)} • ${v.duration_days} hari</option>`).join("");
-
-  $("checkerList").innerHTML=a.length?a.map(v=>`<div class="item"><div class="item-title">${esc(v.name)} <span class="pill ${v.is_active?'on':'off'}">${v.is_active?'CHECK ON':'OFF'}</span> <span class="pill ${v.auto_remove?'on':'off'}">REMOVE ${v.auto_remove?'ON':'OFF'}</span></div><div class="meta">Scan terakhir: ${fmt(v.last_scan_at)}<br>Terdeteksi: ${v.last_scan_total||0} • Unauthorized: ${v.last_scan_unauthorized||0} • Dikeluarkan: ${v.last_scan_removed||0}<br>${v.last_scan_error?`Error: ${esc(v.last_scan_error)}`:'Status: OK'}</div></div>`).join(""):'<div class="muted">Belum ada akun Canva.</div>';
-  $("accountList").innerHTML=a.length?a.map(v=>`<div class="item"><div class="item-title">${esc(v.name)}</div><div class="meta">Slug: ${esc(v.slug)}<br>Session: ${esc(v.session_bucket)}/${esc(v.session_file)}<br>Protected: ${esc((v.protected_emails||[]).join(', ')||'-')}<br>Auto Remove: ${v.auto_remove?'ON':'OFF'}</div></div>`).join(""):'<div class="muted">Belum ada akun.</div>';
-  $("tokenList").innerHTML=t.length?t.map(v=>`<div class="item"><div class="item-title mono">${esc(v.token_hint)}</div><div class="meta">${esc(v.canva_accounts?.name||'-')} • ${esc(v.canva_packages?.name||'-')} • ${v.used_count}/${v.usage_limit} penggunaan • ${esc(v.status)}</div>${v.status==='active'?`<button class="danger" style="margin-top:8px" onclick="disableToken('${v.id}')">Nonaktifkan</button>`:''}</div>`).join(""):'<div class="muted">Belum ada token.</div>';
-  $("accessList").innerHTML=x.length?x.map(v=>`<div class="item"><div class="item-title">${esc(v.email)} <span class="pill ${v.status==='active'?'on':'off'}">${esc(v.status)}</span></div><div class="meta">${esc(v.canva_accounts?.name||'-')} • ${esc(v.canva_packages?.name||'-')}<br>Telegram: ${v.telegram_username?'@'+esc(v.telegram_username):esc(v.telegram_user_id)}<br>Berakhir: ${fmt(v.ends_at)} • Last seen: ${fmt(v.last_seen_in_canva)}</div></div>`).join(""):'<div class="muted">Belum ada akses.</div>';
-  $("auditList").innerHTML=logs.length?logs.map(v=>`<div class="item"><div class="item-title">${esc(v.event)} ${v.email?`• ${esc(v.email)}`:''}</div><div class="meta">${esc(v.canva_accounts?.name||'-')} • ${fmt(v.created_at)}<br>${esc(JSON.stringify(v.details||{}))}</div></div>`).join(""):'<div class="muted">Belum ada audit checker.</div>';
+function renderAdmin(){const a=adminData.accounts||[],p=adminData.packages||[],t=adminData.tokens||[],x=adminData.access||[],logs=adminData.audits||[];$('nAccounts').textContent=a.length;$('nPackages').textContent=p.length;$('nTokens').textContent=t.length;$('nAccess').textContent=x.length;
+  $('accountSelect').innerHTML='<option value="">+ Akun baru</option>'+a.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
+  $('tokenAccount').innerHTML=a.filter(v=>v.is_active).map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
+  $('teamAccount').innerHTML=a.length?a.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join(''):'<option value="">Belum ada akun</option>';
+  $('packageSelect').innerHTML='<option value="">+ Paket baru</option>'+p.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
+  $('tokenPackage').innerHTML=p.filter(v=>v.is_active).map(v=>`<option value="${v.id}">${esc(v.name)} • ${v.duration_days} hari</option>`).join('');
+  $('checkerList').innerHTML=a.length?a.map(v=>`<div class="item"><div class="item-title">${esc(v.name)} <span class="pill ${v.is_active?'on':'off'}">${v.is_active?'CHECK ON':'OFF'}</span> <span class="pill ${v.auto_remove?'on':'off'}">REMOVE ${v.auto_remove?'ON':'OFF'}</span></div><div class="meta">Scan terakhir: ${fmt(v.last_scan_at)}<br>Terdeteksi: ${v.last_scan_total||0} • Unauthorized: ${v.last_scan_unauthorized||0} • Dikeluarkan: ${v.last_scan_removed||0}<br>${v.last_scan_error?`Error: ${esc(v.last_scan_error)}`:'Status: OK'}</div></div>`).join(''):'<div class="muted">Belum ada akun Canva.</div>';
+  $('accountList').innerHTML=a.length?a.map(v=>`<div class="item"><div class="item-title">${esc(v.name)}</div><div class="meta">Slug: ${esc(v.slug)}<br>Session: ${esc(v.session_bucket)}/${esc(v.session_file)}<br>Protected: ${esc((v.protected_emails||[]).join(', ')||'-')}<br>Auto Remove: ${v.auto_remove?'ON':'OFF'}</div></div>`).join(''):'<div class="muted">Belum ada akun.</div>';
+  $('tokenList').innerHTML=t.length?t.map(v=>`<div class="item"><div class="item-title mono">${esc(v.token_hint)}</div><div class="meta">${esc(v.canva_accounts?.name||'-')} • ${esc(v.canva_packages?.name||'-')} • ${v.used_count}/${v.usage_limit} penggunaan • ${esc(v.status)}</div>${v.status==='active'?`<button class="danger" style="margin-top:8px" onclick="disableToken('${v.id}')">Nonaktifkan</button>`:''}</div>`).join(''):'<div class="muted">Belum ada token.</div>';
+  $('accessList').innerHTML=x.length?x.map(v=>`<div class="item"><div class="item-title">${esc(v.email)} <span class="pill ${v.status==='active'?'on':'off'}">${esc(v.status)}</span></div><div class="meta">${esc(v.canva_accounts?.name||'-')} • ${esc(v.canva_packages?.name||'-')}<br>Telegram: ${v.telegram_username?'@'+esc(v.telegram_username):esc(v.telegram_user_id)}<br>Berakhir: ${fmt(v.ends_at)} • Last seen: ${fmt(v.last_seen_in_canva)}</div></div>`).join(''):'<div class="muted">Belum ada akses.</div>';
+  $('auditList').innerHTML=logs.length?logs.map(v=>`<div class="item"><div class="item-title">${esc(v.event)} ${v.email?`• ${esc(v.email)}`:''}</div><div class="meta">${esc(v.canva_accounts?.name||'-')} • ${fmt(v.created_at)}<br>${esc(JSON.stringify(v.details||{}))}</div></div>`).join(''):'<div class="muted">Belum ada audit checker.</div>';
 }
 
-function clearAccount(){$("accountSelect").value="";$("accName").value="";$("accSlug").value="";$("accSessionFile").value="";$("accMembersUrl").value="";$("accInviteUrl").value="";$("accBucket").value="canva-private";$("accProtected").value="";$("accActive").checked=true;$("accAutoRemove").checked=false}
-$("accountSelect").onchange=()=>{const v=adminData.accounts.find(z=>z.id===$("accountSelect").value);if(!v)return clearAccount();$("accName").value=v.name||"";$("accSlug").value=v.slug||"";$("accSessionFile").value=v.session_file||"";$("accMembersUrl").value=v.members_url||"";$("accInviteUrl").value=v.invite_url||"";$("accBucket").value=v.session_bucket||"canva-private";$("accProtected").value=(v.protected_emails||[]).join(", ");$("accActive").checked=!!v.is_active;$("accAutoRemove").checked=!!v.auto_remove};
-$("newAccount").onclick=clearAccount;
-$("saveAccount").onclick=async()=>{try{await adminApi("save_account",{account:{id:$("accountSelect").value||null,name:$("accName").value,slug:$("accSlug").value,members_url:$("accMembersUrl").value,invite_url:$("accInviteUrl").value,session_bucket:$("accBucket").value,session_file:$("accSessionFile").value,protected_emails:$("accProtected").value,auto_remove:$("accAutoRemove").checked,is_active:$("accActive").checked}});showMsg("adminMsg","Akun Canva tersimpan.");clearAccount();await refreshAdmin()}catch(e){showMsg("adminMsg",e.message,false)}};
+function clearAccount(){$('accountSelect').value='';$('accName').value='';$('accSlug').value='';$('accSessionFile').value='';$('accMembersUrl').value='';$('accInviteUrl').value='';$('accBucket').value='canva-private';$('accProtected').value='';$('accActive').checked=true;$('accAutoRemove').checked=false}
+$('accountSelect').onchange=()=>{const v=adminData.accounts.find(z=>z.id===$('accountSelect').value);if(!v)return clearAccount();$('accName').value=v.name||'';$('accSlug').value=v.slug||'';$('accSessionFile').value=v.session_file||'';$('accMembersUrl').value=v.members_url||'';$('accInviteUrl').value=v.invite_url||'';$('accBucket').value=v.session_bucket||'canva-private';$('accProtected').value=(v.protected_emails||[]).join(', ');$('accActive').checked=!!v.is_active;$('accAutoRemove').checked=!!v.auto_remove};
+$('newAccount').onclick=clearAccount;
+$('saveAccount').onclick=()=>withLoading($('saveAccount'),'Menyimpan...',async()=>{try{await adminApi('save_account',{account:{id:$('accountSelect').value||null,name:$('accName').value,slug:$('accSlug').value,members_url:$('accMembersUrl').value,invite_url:$('accInviteUrl').value,session_bucket:$('accBucket').value,session_file:$('accSessionFile').value,protected_emails:$('accProtected').value,auto_remove:$('accAutoRemove').checked,is_active:$('accActive').checked}});showMsg('adminMsg','Akun Canva tersimpan.');clearAccount();await refreshAdmin()}catch(e){showMsg('adminMsg',e.message,false)}});
 
-function clearPackage(){$("packageSelect").value="";$("pkgName").value="";$("pkgDays").value=30;$("pkgDesc").value="";$("pkgActive").checked=true}
-$("packageSelect").onchange=()=>{const v=adminData.packages.find(z=>z.id===$("packageSelect").value);if(!v)return clearPackage();$("pkgName").value=v.name||"";$("pkgDays").value=v.duration_days||30;$("pkgDesc").value=v.description||"";$("pkgActive").checked=!!v.is_active};
-$("newPackage").onclick=clearPackage;
-$("savePackage").onclick=async()=>{try{await adminApi("save_package",{package:{id:$("packageSelect").value||null,name:$("pkgName").value,duration_days:Number($("pkgDays").value),description:$("pkgDesc").value,is_active:$("pkgActive").checked}});showMsg("adminMsg","Paket tersimpan.");clearPackage();await refreshAdmin()}catch(e){showMsg("adminMsg",e.message,false)}};
+function clearPackage(){$('packageSelect').value='';$('pkgName').value='';$('pkgDays').value=30;$('pkgDesc').value='';$('pkgActive').checked=true}
+$('packageSelect').onchange=()=>{const v=adminData.packages.find(z=>z.id===$('packageSelect').value);if(!v)return clearPackage();$('pkgName').value=v.name||'';$('pkgDays').value=v.duration_days||30;$('pkgDesc').value=v.description||'';$('pkgActive').checked=!!v.is_active};
+$('newPackage').onclick=clearPackage;
+$('savePackage').onclick=()=>withLoading($('savePackage'),'Menyimpan...',async()=>{try{await adminApi('save_package',{package:{id:$('packageSelect').value||null,name:$('pkgName').value,duration_days:Number($('pkgDays').value),description:$('pkgDesc').value,is_active:$('pkgActive').checked}});showMsg('adminMsg','Paket tersimpan.');clearPackage();await refreshAdmin()}catch(e){showMsg('adminMsg',e.message,false)}});
 
-$("generateTokens").onclick=async()=>{try{const exp=$("tokenExpires").value?new Date($("tokenExpires").value).toISOString():null;const d=await adminApi("generate_tokens",{account_id:$("tokenAccount").value,package_id:$("tokenPackage").value,count:Number($("tokenCount").value),usage_limit:Number($("tokenUses").value),expires_at:exp});$("rawTokens").value=d.tokens.join("\n");showMsg("adminMsg",`${d.tokens.length} token berhasil dibuat. Copy sekarang karena token utuh hanya ditampilkan sekali.`);await refreshAdmin()}catch(e){showMsg("adminMsg",e.message,false)}};
-$("copyTokens").onclick=async()=>{try{await navigator.clipboard.writeText($("rawTokens").value);showMsg("adminMsg","Token berhasil dicopy.")}catch{showMsg("adminMsg","Copy otomatis gagal. Silakan copy manual.",false)}};
-window.disableToken=async id=>{if(!confirm("Nonaktifkan token ini?"))return;try{await adminApi("disable_token",{token_id:id});await refreshAdmin()}catch(e){showMsg("adminMsg",e.message,false)}};
-async function refreshAdmin(){try{const d=await adminApi("bootstrap");adminData=d;adminLoaded=true;renderAdmin()}catch(e){$("adminAuth").className="banner bad";$("adminAuth").textContent=`Admin API gagal: ${e.message}. Pastikan ADMIN_TELEGRAM_IDS dan SQL v3 sudah terpasang.`}}
-$("refreshAdmin").onclick=refreshAdmin;
+$('generateTokens').onclick=()=>withLoading($('generateTokens'),'Membuat...',async()=>{try{const exp=$('tokenExpires').value?new Date($('tokenExpires').value).toISOString():null;const d=await adminApi('generate_tokens',{account_id:$('tokenAccount').value,package_id:$('tokenPackage').value,count:Number($('tokenCount').value),usage_limit:Number($('tokenUses').value),expires_at:exp});$('rawTokens').value=d.tokens.join('\n');showMsg('adminMsg',`${d.tokens.length} token berhasil dibuat. Copy sekarang karena token utuh hanya ditampilkan sekali.`);await refreshAdmin()}catch(e){showMsg('adminMsg',e.message,false)}});
+$('copyTokens').onclick=()=>withLoading($('copyTokens'),'Menyalin...',async()=>{try{await navigator.clipboard.writeText($('rawTokens').value);showMsg('adminMsg','Token berhasil dicopy.')}catch{showMsg('adminMsg','Copy otomatis gagal. Silakan copy manual.',false)}});
+window.disableToken=async id=>{if(!confirm('Nonaktifkan token ini?'))return;try{await adminApi('disable_token',{token_id:id});await refreshAdmin()}catch(e){showMsg('adminMsg',e.message,false)}};
+async function refreshAdmin(){try{const d=await adminApi('bootstrap');adminData=d;adminLoaded=true;renderAdmin()}catch(e){$('adminAuth').className='banner bad';$('adminAuth').textContent=`Admin API gagal: ${e.message}. Pastikan ADMIN_TELEGRAM_IDS dan SQL v4 sudah terpasang.`}}
+$('refreshAdmin').onclick=()=>withLoading($('refreshAdmin'),'Memuat...',refreshAdmin);
+$('loadTeamEmails').onclick=()=>withLoading($('loadTeamEmails'),'Memuat...',async()=>{const accountId=$('teamAccount').value;if(!accountId){$('teamEmailMeta').textContent='Pilih akun Canva terlebih dahulu.';$('teamEmailList').innerHTML='';return}try{const d=await adminApi('team_emails',{account_id:accountId});$('teamEmailMeta').innerHTML=`Akun: <b>${esc(d.account?.name||'-')}</b><br>Scan terakhir: ${fmt(d.account?.last_scan_at)}<br>Total email saat scan: ${d.account?.last_scan_total||0}`; if(!d.rows?.length){$('teamEmailList').innerHTML='<div class="muted">Belum ada hasil scan. Jalankan checker 24 jam / Run workflow GitHub Actions terlebih dahulu.</div>';return}$('teamEmailList').innerHTML=d.rows.map((row,i)=>`<div class="item"><div class="item-title">${i+1}. ${esc(row.email)}</div><div class="meta">Terlihat terakhir: ${fmt(row.last_seen_at)}</div></div>`).join('')}catch(e){$('teamEmailMeta').textContent='Gagal memuat daftar email tim.';$('teamEmailList').innerHTML=`<div class="muted">${esc(e.message)}</div>`}});
 
-(async()=>{me=await loadMe();await loadStatus();if(location.hash==="#admin")switchTab("admin")})();
+(async()=>{me=await loadMe();await loadStatus();if(location.hash==='#admin')switchTab('admin')})();
 </script>
 </body>
 </html>

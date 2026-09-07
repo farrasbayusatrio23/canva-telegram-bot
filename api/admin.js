@@ -21,7 +21,7 @@ function slugify(input) {
 
 function asStringArray(v) {
   if (Array.isArray(v)) return v.map(String).map(x => x.trim().toLowerCase()).filter(Boolean);
-  return String(v || "").split(/[,\n]/).map(x => x.trim().toLowerCase()).filter(Boolean);
+  return String(v || "").split(/[\n,]/).map(x => x.trim().toLowerCase()).filter(Boolean);
 }
 
 function isHttpUrl(v) {
@@ -71,6 +71,24 @@ export default async function handler(req, res) {
 
     if (action === "bootstrap") {
       return res.status(200).json({ ok: true, admin: true, ...(await bootstrap(supabase)) });
+    }
+
+    if (action === "team_emails") {
+      const accountId = String(body.account_id || "").trim();
+      if (!accountId) return res.status(400).json({ ok: false, error: 'account_required', message: 'Pilih akun Canva terlebih dahulu.' });
+
+      const [accountRes, membersRes] = await Promise.all([
+        supabase.from('canva_accounts').select('id,name,last_scan_at,last_scan_total,last_scan_unauthorized,last_scan_removed,last_scan_error').eq('id', accountId).single(),
+        supabase.from('canva_member_snapshots').select('email,last_seen_at,last_scan_at,is_present').eq('account_id', accountId).eq('is_present', true).order('email').limit(5000)
+      ]);
+      if (accountRes.error) throw accountRes.error;
+      if (membersRes.error) throw membersRes.error;
+
+      return res.status(200).json({
+        ok: true,
+        account: accountRes.data,
+        rows: membersRes.data || []
+      });
     }
 
     if (action === "save_account") {
@@ -182,7 +200,7 @@ export default async function handler(req, res) {
 
     return res.status(400).json({ ok: false, error: "unknown_action" });
   } catch (err) {
-    console.error(err);
+    console.error('[admin]', err);
     return res.status(err.status || 500).json({ ok: false, error: err.message || "server_error", message: err.message || "server_error" });
   }
 }
